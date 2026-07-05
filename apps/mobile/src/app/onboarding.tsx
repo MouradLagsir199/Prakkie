@@ -1,6 +1,6 @@
 import { CHAIN_IDS, CHAINS, type ChainId } from '@prakkie/shared';
-import AsyncStorageLike from 'expo-sqlite/kv-store';
 import { useRouter } from 'expo-router';
+import { kv } from '../data/kv';
 import { Check, Minus, Plus } from 'lucide-react-native';
 import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -40,7 +40,7 @@ export default function Onboarding() {
     } catch {
       /* offline: defaults blijven; instellingen sync later */
     }
-    await AsyncStorageLike.setItem('prakkie.onboarded', '1');
+    await kv.setItem('prakkie.onboarded', '1');
     setBusy(false);
     router.replace('/import');
   }

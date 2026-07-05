@@ -4,11 +4,11 @@ import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import KVStore from 'expo-sqlite/kv-store';
 import { router } from 'expo-router';
 import { useEffect } from 'react';
 import { AppState, Platform } from 'react-native';
 import { syncNow } from '../data';
+import { kv } from '../data/kv';
 import { colors } from '../theme/tokens';
 
 SplashScreen.preventAutoHideAsync();
@@ -36,10 +36,10 @@ export default function RootLayout() {
     return () => sub.remove();
   }, []);
 
-  // first launch → onboarding (A3); kv-store is sqlite-backed (native only)
+  // first launch → onboarding (A3)
   useEffect(() => {
-    if (Platform.OS === 'web') return;
-    KVStore.getItem('prakkie.onboarded')
+    if (Platform.OS === 'web') return; // web companion is a viewer, no onboarding
+    kv.getItem('prakkie.onboarded')
       .then((v) => {
         if (!v) router.replace('/onboarding');
       })
