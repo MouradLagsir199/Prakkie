@@ -1,0 +1,18 @@
+# Secrets — never committed (plan/06_iac.md §1)
+secrets.txt
+.env
+.env.*
+*.local
+local.settings.json
+.azure/
+
+# Dependencies & build output
+node_modules/
+dist/
+build/
+.expo/
+*.tsbuildinfo
+
+# OS noise
+.DS_Store
+Thumbs.db
