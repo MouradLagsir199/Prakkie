@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Prakkie — web</title>
+<style>
+  /* docs/04 tokens: cream bg, deep green primary, Young Serif display */
+  @import url('https://fonts.googleapis.com/css2?family=Young+Serif&family=Instrument+Sans:wght@400;500;600;700&display=swap');
+  :root { --bg:#FAF7F0; --primary:#2E6B3E; --surface:#fff; --text:#22301E; --muted:#75816F; --border:rgba(34,48,30,.10); --badge:#EAF1E5; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--text); font-family:'Instrument Sans',sans-serif; }
+  .wrap { max-width:960px; margin:0 auto; padding:28px 20px 80px; }
+  h1 { font-family:'Young Serif',serif; font-size:29px; margin-bottom:4px; }
+  h2 { font-size:17px; margin:26px 0 10px; }
+  .meta { color:var(--muted); font-size:13px; }
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:18px; padding:16px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:14px; }
+  .recipe { overflow:hidden; padding:0; cursor:pointer; }
+  .recipe img { width:100%; height:130px; object-fit:cover; display:block; background:var(--badge); }
+  .recipe .p { padding:10px 12px 12px; }
+  .recipe b { font-size:14px; }
+  .pill { display:inline-block; background:var(--badge); color:var(--primary); font-weight:700; font-size:11px; border-radius:999px; padding:3px 8px; margin-top:6px; }
+  input,button { font:inherit; }
+  input { width:100%; padding:11px 14px; border:1px solid var(--border); border-radius:14px; background:var(--surface); margin-bottom:10px; }
+  button { background:var(--primary); color:#FDFBF6; border:0; border-radius:999px; padding:11px 22px; font-weight:600; cursor:pointer; }
+  .item { display:flex; gap:10px; padding:9px 0; border-bottom:1px solid var(--border); font-size:15px; }
+  .item.done { text-decoration:line-through; color:var(--muted); }
+  #login { max-width:380px; margin:60px auto; }
+  .err { color:#B3261E; font-size:13px; margin-top:8px; }
+  dialog { border:0; border-radius:18px; max-width:560px; width:92%; padding:24px; }
+  dialog::backdrop { background:rgba(34,48,30,.35); }
+  li { margin-left:18px; margin-bottom:6px; font-size:15px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="login" class="card">
+    <h1>Prakkie</h1>
+    <p class="meta" style="margin-bottom:14px">Web companion — lees je recepten en lijstjes mee. Bewerken doe je in de app.</p>
+    <input id="email" type="email" placeholder="e-mailadres" autocomplete="username" />
+    <input id="password" type="password" placeholder="wachtwoord" autocomplete="current-password" />
+    <button onclick="login()">Inloggen</button>
+    <div id="loginErr" class="err"></div>
+  </div>
+
+  <div id="app" style="display:none">
+    <h1>Prakkie</h1>
+    <p class="meta" id="who"></p>
+    <h2>Boodschappen</h2>
+    <div id="lists" class="card"></div>
+    <h2>Mijn recepten</h2>
+    <div id="recipes" class="grid"></div>
+  </div>
+</div>
+<dialog id="detail"></dialog>
+
+<script>
+const API = localStorage.getItem('prakkie_api') ?? 'https://func-prakkie-api-dev.azurewebsites.net/api';
+let access = sessionStorage.getItem('prakkie_access');
+let refresh = sessionStorage.getItem('prakkie_refresh');
+
+async function call(path, init = {}) {
+  const go = () => fetch(API + path, { ...init, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + access, ...(init.headers ?? {}) } });
+  let res = await go();
+  if (res.status === 401 && refresh) {
+    const r = await fetch(API + '/v1/auth/refresh', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ refresh_token: refresh }) });
+    if (r.ok) { const b = await r.json(); access = b.access_token; refresh = b.refresh_token; sessionStorage.setItem('prakkie_access', access); sessionStorage.setItem('prakkie_refresh', refresh); res = await go(); }
+  }
+  return res;
+}
+
+async function login() {
+  const body = { email: document.getElementById('email').value, password: document.getElementById('password').value, platform: 'web' };
+  const res = await fetch(API + '/v1/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { document.getElementById('loginErr').textContent = data.message ?? 'Inloggen mislukt'; return; }
+  access = data.access_token; refresh = data.refresh_token;
+  sessionStorage.setItem('prakkie_access', access); sessionStorage.setItem('prakkie_refresh', refresh);
+  boot(data.user);
+}
+
+const euro = (c) => '€ ' + Math.floor(c / 100) + ',' + String(c % 100).padStart(2, '0');
+
+async function boot(user) {
+  document.getElementById('login').style.display = 'none';
+  document.getElementById('app').style.display = '';
+  if (user) document.getElementById('who').textContent = user.display_name ?? user.email ?? '';
+  const res = await call('/v1/sync?entities=recipes,lists,list_items');
+  if (!res.ok) { document.getElementById('app').innerHTML = '<p class="meta">Sessie verlopen — herlaad en log opnieuw in.</p>'; return; }
+  const { changes } = await res.json();
+  const recipes = (changes.recipes?.rows ?? []).filter((r) => !r.deleted_at);
+  const lists = (changes.lists?.rows ?? []).filter((r) => !r.deleted_at);
+  const items = (changes.list_items?.rows ?? []).filter((r) => !r.deleted_at);
+
+  document.getElementById('lists').innerHTML = lists.map((l) => {
+    const li = items.filter((i) => i.list_id === l.id);
+    return '<h3 style="margin:8px 0">' + esc(l.name) + ' <span class="meta">' + li.filter((i)=>i.checked).length + '/' + li.length + '</span></h3>' +
+      li.map((i) => '<div class="item' + (i.checked ? ' done' : '') + '">' + (i.quantity ? esc(String(i.quantity).replace('.', ',')) + (i.unit ? ' ' + esc(i.unit) : '') + ' ' : '') + esc(i.name) + '</div>').join('');
+  }).join('') || '<p class="meta">Nog geen lijsten.</p>';
+
+  document.getElementById('recipes').innerHTML = recipes.map((r, i) => {
+    const img = (r.images ?? [])[0];
+    const url = typeof img === 'string' ? img : img?.url;
+    const ppp = r.price_cache?.per_portion_cents;
+    return '<div class="card recipe" onclick="openDetail(' + i + ')"><img loading="lazy" src="' + (url ? esc(url) : '') + '" alt=""><div class="p"><b>' + esc(r.title) + '</b><br>' + (ppp ? '<span class="pill">' + euro(ppp) + ' p.p.</span>' : '') + '</div></div>';
+  }).join('') || '<p class="meta">Nog geen recepten — importeer je eerste in de app.</p>';
+  window.__recipes = recipes;
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; }
+
+function openDetail(i) {
+  const r = window.__recipes[i];
+  const dlg = document.getElementById('detail');
+  dlg.innerHTML = '<h1 style="font-size:24px">' + esc(r.title) + '</h1>' +
+    (r.source_author ? '<p class="meta">via ' + esc(r.source_author) + '</p>' : '') +
+    '<h2>Ingrediënten</h2><ul>' + (r.ingredients ?? []).map((x) => '<li>' + esc(x.raw_text ?? x.item_normalised ?? '') + '</li>').join('') + '</ul>' +
+    '<h2>Bereiding</h2><ol>' + (r.steps ?? []).map((s) => '<li>' + esc(s.text) + '</li>').join('') + '</ol>' +
+    '<button onclick="this.closest(\'dialog\').close()" style="margin-top:14px">Sluiten</button>';
+  dlg.showModal();
+}
+
+if (access) boot(null);
+</script>
+</body>
+</html>

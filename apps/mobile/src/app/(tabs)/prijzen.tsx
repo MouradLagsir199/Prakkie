@@ -26,7 +26,7 @@ interface CompareResult {
   insight: { savings_cents: number; driving_items: { name: string; delta_cents: number }[] } | null;
 }
 
-const chainName = (id: string) => (CHAINS as Record<string, { name?: string }>)[id as ChainId]?.name ?? id.toUpperCase();
+const chainName = (id: string) => (CHAINS as Record<string, { displayName?: string }>)[id as ChainId]?.displayName ?? id.toUpperCase();
 
 /** Prijzen — mockup 07: ranked chains, voordeligst/jouw winkel, honest gaps, staleness, F4 insight. */
 export default function PrijzenScreen() {

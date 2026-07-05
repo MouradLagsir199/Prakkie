@@ -4,8 +4,10 @@ import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
+import KVStore from 'expo-sqlite/kv-store';
+import { router } from 'expo-router';
 import { useEffect } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import { syncNow } from '../data';
 import { colors } from '../theme/tokens';
 
@@ -32,6 +34,16 @@ export default function RootLayout() {
       if (state === 'active') kick();
     });
     return () => sub.remove();
+  }, []);
+
+  // first launch → onboarding (A3); kv-store is sqlite-backed (native only)
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    KVStore.getItem('prakkie.onboarded')
+      .then((v) => {
+        if (!v) router.replace('/onboarding');
+      })
+      .catch(() => {});
   }, []);
 
   if (!fontsLoaded) return null;

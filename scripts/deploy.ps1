@@ -169,8 +169,16 @@ if (-not $SkipApps) {
 }
 
 # --- 4. web (Static Web Apps) ---
-if (Test-Path (Join-Path $repoRoot 'apps/web/package.json')) {
-    Write-Host "`n--- web: apps/web found, run swa deploy here (not yet wired) ---"
+if ((-not $SkipApps) -and (Test-Path (Join-Path $repoRoot 'apps/web/index.html'))) {
+    Write-Host "`n--- web (Static Web Apps) ---"
+    $swaName = az staticwebapp list -g "prakkie-$Env" --query "[0].name" -o tsv
+    if ($swaName) {
+        $swaToken = az staticwebapp secrets list -n $swaName -g "prakkie-$Env" --query "properties.apiKey" -o tsv
+        npx --yes @azure/static-web-apps-cli@latest deploy (Join-Path $repoRoot 'apps/web') --deployment-token $swaToken --env production
+        if ($LASTEXITCODE -ne 0) { Write-Warning 'swa deploy failed (non-fatal)' }
+        else { Write-Host ("web: https://" + (az staticwebapp show -n $swaName -g "prakkie-$Env" --query defaultHostname -o tsv)) }
+    }
+    else { Write-Host 'no static web app in this resource group — skipped' }
 }
 
 # --- 5. migrations ---
