@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@azure/functions": "^4.6.0",
+    "@azure/storage-blob": "^12.33.0",
+    "@azure/storage-queue": "^12.31.0",
     "@noble/hashes": "^1.7.0",
     "@prakkie/matching": "workspace:*",
     "@prakkie/shared": "workspace:*",

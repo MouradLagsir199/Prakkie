@@ -11,3 +11,4 @@ export * from './correction';
 export * from './link-context';
 export * from './sync';
 export * from './offline-engine';
+export * from './jsonld';

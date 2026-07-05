@@ -21,4 +21,15 @@ export const env = {
   /** Empty until owner input #4 lands — Apple/Google sign-in returns 501 without them. */
   appleClientIds: (process.env.APPLE_CLIENT_IDS ?? '').split(',').filter(Boolean),
   googleClientIds: (process.env.GOOGLE_CLIENT_IDS ?? '').split(',').filter(Boolean),
+  // WS3 import pipeline — server-side only, never shipped to the client
+  get apifyToken() {
+    return required('APIFY_API_TOKEN');
+  },
+  get openaiApiKey() {
+    return required('OPENAI_API_KEY');
+  },
+  openaiModel: process.env.OPENAI_MODEL ?? 'gpt-5-mini',
+  get storageConnection() {
+    return required('AzureWebJobsStorage');
+  },
 };

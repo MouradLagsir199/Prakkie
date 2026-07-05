@@ -58,6 +58,9 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         // KV references resolve at runtime once scripts/deploy has seeded the secrets
         { name: 'JWT_SIGNING_KEY', value: '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=JWT-SIGNING-KEY)' }
         { name: 'PG_PASSWORD', value: '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=${pgSecretName})' }
+        // import pipeline (WS3) — server-side only, never reachable from the client
+        { name: 'APIFY_API_TOKEN', value: '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=APIFY-API-TOKEN)' }
+        { name: 'OPENAI_API_KEY', value: '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=OPENAI-API-KEY)' }
       ]
     }
   }

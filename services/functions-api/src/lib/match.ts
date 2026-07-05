@@ -46,57 +46,63 @@ type Queryable = Pick<PoolClient, 'query'>;
 export async function resolveLexicon(
   item: string,
   client?: Queryable
-): Promise<{ term: string; aisleGroupId: number | null }> {
+): Promise<{ term: string; aisleGroupId: number | null; aliases: string[] }> {
   const q = client ?? { query };
   const r = await q.query(
-    `SELECT item_normalised, aisle_group_id FROM catalog.ingredient_lexicon
+    `SELECT item_normalised, aisle_group_id, aliases FROM catalog.ingredient_lexicon
      WHERE item_normalised = $1 OR $1 = ANY(aliases) LIMIT 1`,
     [item]
   );
   if (r.rows[0]) {
-    return { term: String(r.rows[0].item_normalised), aisleGroupId: r.rows[0].aisle_group_id ?? null };
+    const term = String(r.rows[0].item_normalised);
+    const aliases = [...new Set([item, term, ...((r.rows[0].aliases as string[]) ?? [])])];
+    return { term, aisleGroupId: r.rows[0].aisle_group_id ?? null, aliases };
   }
-  return { term: item, aisleGroupId: null };
+  return { term: item, aisleGroupId: null, aliases: [item] };
 }
 
+// composite/processed product words: penalised when absent from the query itself
+const PROCESSED_RX = '\\m(saus|soep|salade|mix|kruidenmix|poeder|drink|snack|chips|koek|smaak|geur|shampoo|spray|kattenvoer|hondenvoer)\\M';
+
 const CANDIDATE_SQL = `
-WITH term AS (SELECT $1::text AS q),
+WITH terms AS (SELECT DISTINCT unnest($1::text[]) AS q),
 corrections AS (
   SELECT mc.chain_id, mc.chosen_sku_id
-  FROM app.match_corrections mc, term t
-  WHERE mc.user_id = $4 AND mc.item_normalised IN (t.q, $5)
+  FROM app.match_corrections mc
+  WHERE mc.user_id = $4 AND mc.item_normalised = ANY($1 || $5)
 ),
 hints AS (
   SELECT lp.chain_id, lp.sku_id, lp.rank
-  FROM catalog.lexicon_products lp, term t
-  WHERE lp.item_normalised = t.q
+  FROM catalog.lexicon_products lp
+  WHERE lp.item_normalised = ANY($1)
 ),
 fuzzy AS (
-  -- score shape: trgm similarity + whole-word boost + COVERAGE (how much of the
-  -- product name the query explains — "uien" is all about "ui", "gehakt met ui"
-  -- is not) + exact/prefix boosts. Cheap-first price is the final tiebreak so
-  -- raw produce beats processed products at equal text score.
-  SELECT p.chain_id, p.sku_id,
-         GREATEST(word_similarity(t.q, p.name), similarity(p.name, t.q))
-         + CASE WHEN public.fold_text(p.name) ~ ('\\m' || t.q || '\\M') THEN 0.18 ELSE 0 END
-         + CASE WHEN public.fold_text(p.name) = t.q THEN 0.35
-                WHEN public.fold_text(p.name) LIKE t.q || '%' THEN 0.12
-                ELSE 0 END
-         + 0.45 * length(t.q)::float / GREATEST(length(p.name), length(t.q))
-         -- owner's AI-canonicalised names: the strongest "this IS the base
-         -- product" signal ("uien" → canonical display 'ui'); processed
-         -- products canonicalise to composite keys and get nothing here
-         + CASE WHEN nc.display_name IS NOT NULL AND public.fold_text(nc.display_name) = t.q THEN 0.60
-                WHEN nc.display_name IS NOT NULL
-                     AND public.fold_text(nc.display_name) ~ ('(\\m|_)' || t.q || '(\\M|_)') THEN 0.15
-                ELSE 0 END AS score,
-         p.price_cents
-  FROM catalog.products p
-  CROSS JOIN term t
-  LEFT JOIN catalog.name_canonical nc
-    ON nc.name_search = public.fold_text(p.name)
-  WHERE p.chain_id = ANY($2) AND p.available
-    AND (t.q <% p.name OR p.name % t.q)
+  -- score shape per (query term, product): trgm similarity + whole-word boost
+  -- + COVERAGE (how much of the product name the query explains — "uien" is
+  -- all about "ui", "gehakt met ui" is not) + canonical-name equality against
+  -- the full alias set ($6) + processed-product penalty. Cheap-first price is
+  -- the final tiebreak so raw produce beats processed products at equal score.
+  SELECT chain_id, sku_id, MAX(score) AS score, MIN(price_cents) AS price_cents FROM (
+    SELECT p.chain_id, p.sku_id, p.price_cents,
+           GREATEST(word_similarity(t.q, p.name), similarity(p.name, t.q))
+           + CASE WHEN public.fold_text(p.name) ~ ('\\m' || t.q || '\\M') THEN 0.18 ELSE 0 END
+           + CASE WHEN public.fold_text(p.name) = t.q THEN 0.35
+                  WHEN public.fold_text(p.name) LIKE t.q || '%' THEN 0.12
+                  ELSE 0 END
+           + 0.45 * length(t.q)::float / GREATEST(length(p.name), length(t.q))
+           + CASE WHEN public.fold_text(nc.display_name) = ANY($6) THEN 0.60
+                  WHEN nc.display_name IS NOT NULL
+                       AND public.fold_text(nc.display_name) ~ ('\\m' || t.q || '\\M') THEN 0.15
+                  ELSE 0 END
+           - CASE WHEN public.fold_text(p.name) ~ '${PROCESSED_RX}'
+                       AND NOT t.q ~ '${PROCESSED_RX}' THEN 0.22 ELSE 0 END AS score
+    FROM catalog.products p
+    CROSS JOIN terms t
+    LEFT JOIN catalog.name_canonical nc
+      ON nc.name_search = public.fold_text(p.name)
+    WHERE p.chain_id = ANY($2) AND p.available
+      AND (t.q <% p.name OR p.name % t.q)
+  ) s GROUP BY chain_id, sku_id
 ),
 ranked AS (
   SELECT chain_id, sku_id, score, source, rn FROM (
@@ -133,8 +139,9 @@ export async function matchItem(
   client?: Queryable
 ): Promise<Record<string, ChainMatch>> {
   const q = client ?? { query };
-  const { term } = await resolveLexicon(item, client);
-  const r = await q.query(CANDIDATE_SQL, [term, chainIds, SHORTLIST_SIZE, userId, item]);
+  const { term, aliases } = await resolveLexicon(item, client);
+  const searchTerms = [...new Set([item, term])];
+  const r = await q.query(CANDIDATE_SQL, [searchTerms, chainIds, SHORTLIST_SIZE, userId, [item], aliases]);
 
   const byChain: Record<string, MatchCandidate[]> = {};
   for (const row of r.rows as (MatchCandidate & { confidence: string | number })[]) {

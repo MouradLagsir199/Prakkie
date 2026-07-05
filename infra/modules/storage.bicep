@@ -138,6 +138,7 @@ var queueNames = [
   'crawl-tasks'
   'price-compute'
   'export-jobs'
+  'import-jobs'
 ]
 
 resource queues 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = [
