@@ -40,9 +40,20 @@ app.http('list-generate', {
       z.object({
         recipes: z.array(z.object({ recipe_id: z.string().uuid(), servings: z.number().int().positive() })).min(1),
         replace_generated: z.boolean().default(false),
+        /** G6 — subtract pantry stock; reversible per line client-side */
+        pantry_aware: z.boolean().default(false),
       })
     );
-    const lines = await generateLines(body.recipes, claims.userId);
+    let lines = await generateLines(body.recipes, claims.userId);
+    if (body.pantry_aware) {
+      const pantry = await query<{ item_normalised: string | null; name: string }>(
+        `SELECT item_normalised, name FROM app.pantry_items WHERE deleted_at IS NULL AND (owner_id = $1
+           OR household_id IN (SELECT household_id FROM app.household_members WHERE user_id = $1))`,
+        [claims.userId]
+      );
+      const have = new Set(pantry.rows.map((p) => (p.item_normalised ?? p.name).toLowerCase()));
+      lines = lines.filter((l) => !have.has(l.item_normalised.toLowerCase()));
+    }
     const inserted = await withTransaction(async (tx) => {
       if (body.replace_generated) {
         // re-derive: only non-manual lines are plan/generator-owned (G4 rule)
