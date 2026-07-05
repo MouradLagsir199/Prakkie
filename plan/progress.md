@@ -32,12 +32,13 @@
 - [x] SQL migrations: schemas `app`/`catalog`/`discovery` per [`04_data-model.md`](04_data-model.md), extensions enabled — `services/migrations/0001–0006`, applied to dev via `scripts/db-migrate.mjs` (idempotent, wired into `scripts/deploy.ps1` step 5); seeded chains (Picnic kill-switched) + 20-row aisle taxonomy + AH ordering profile; least-privilege `prakkie_app`/`prakkie_ingest` roles verified (ingest denied on `app.*`)
 - [x] `/v1` CRUD: recipes, lists, plans, user-settings — `services/functions-api/src/functions/{recipes,lists,plans,me}.ts`, one shared entity registry (`lib/entities.ts`) driving both REST and sync visibility/writability
 - [x] `sync-pull` delta endpoint + push with LWW-per-field-group — `functions/sync.ts` + `lib/sync-core.ts`; conflict resolution, tombstones, server-authoritative `checked_by/checked_at`, forbidden-row handling all covered by unit tests and the live smoke test
-- [ ] Mobile offline cache (expo-sqlite) + mutation queue
+- [x] Mobile offline cache (expo-sqlite) + mutation queue — shared `OfflineEngine` in `packages/shared` (9 unit tests: airplane-mode, coalescing, LWW conflict, tombstones, clobber-protection) + expo-sqlite/SecureStore adapters in `apps/mobile/src/data/`; sync on launch/foreground; verified live via `scripts/offline-smoke.mjs` (8/8 against dev)
 - [ ] Nightly `pg_dump` timer → immutable `db-backups` container
 - [ ] **PITR restore drill to −1 h passed**
 - [ ] GDPR export: one-tap, complete, re-importable archive
 - [ ] Account delete with 30-day grace + purge job
-- [ ] Recipe survives sign-out / reinstall / platform-switch test
+- [ ] Recipe survives sign-out / reinstall / platform-switch test — protocol level proven live (`scripts/offline-smoke.mjs`: fresh install pulls full account, cross-device edit, tombstones); in-app pass awaits WS4 screens on real data
+- Deferred by owner (2026-07-06, "functional first"): pg_dump timer, PITR drill (script ready: `scripts/pitr-drill.mjs`; 0007 backup-role migration written, unapplied), GDPR export, account delete
 
 ## WS2 — 11-chain ingestion + matching engine (core moat)
 

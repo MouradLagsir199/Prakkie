@@ -5,6 +5,8 @@ import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
+import { AppState } from 'react-native';
+import { syncNow } from '../data';
 import { colors } from '../theme/tokens';
 
 SplashScreen.preventAutoHideAsync();
@@ -21,6 +23,16 @@ export default function RootLayout() {
   useEffect(() => {
     if (fontsLoaded) SplashScreen.hideAsync();
   }, [fontsLoaded]);
+
+  // offline-first sync: on launch and every return to foreground (WS1)
+  useEffect(() => {
+    const kick = () => syncNow().catch(() => {}); // offline is a normal state, queue survives
+    kick();
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') kick();
+    });
+    return () => sub.remove();
+  }, []);
 
   if (!fontsLoaded) return null;
 

@@ -9,3 +9,5 @@ export * from './user';
 export * from './pantry';
 export * from './correction';
 export * from './link-context';
+export * from './sync';
+export * from './offline-engine';

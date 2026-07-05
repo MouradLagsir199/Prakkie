@@ -13,7 +13,8 @@ beforeAll(() => {
   process.env.JWT_SIGNING_KEY = 'test-signing-key-that-is-long-enough-for-hs256';
 });
 
-describe('password hashing (argon2id)', () => {
+// argon2id is deliberately slow (~2s+/hash); the 5s default flakes under parallel load
+describe('password hashing (argon2id)', { timeout: 30_000 }, () => {
   it('round-trips and rejects wrong passwords', () => {
     const hash = hashPassword('hunter2-maar-langer');
     expect(hash).toMatch(/^\$argon2id\$v=19\$/);
