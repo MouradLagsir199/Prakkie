@@ -24,6 +24,10 @@ await build({
   // @azure/functions-core is provided by the Functions host's node worker;
   // pg-native is pg's optional native binding (never installed — try/catch'd require)
   external: ['@azure/functions-core', 'pg-native'],
+  // esbuild rewrites import.meta to {} in cjs output; @azure/storage-* calls
+  // createRequire(import.meta.url) at load time — give it the real file URL
+  define: { 'import.meta.url': '__bundledImportMetaUrl' },
+  banner: { js: "const __bundledImportMetaUrl = require('node:url').pathToFileURL(__filename).href;" },
   outdir: join(appDir, '.publish', 'dist', 'src', 'functions'),
   logLevel: 'info',
 });

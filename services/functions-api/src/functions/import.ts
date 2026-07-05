@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { query } from '../lib/db';
 import { env } from '../lib/env';
 import { HttpError, handler, json, parseBody, requireAuth } from '../lib/http';
-import { failureKind, hasUsableRecipeSignal, type LinkContext } from '../lib/import/context';
+import { detectPlatform, failureKind, hasUsableRecipeSignal, type LinkContext } from '../lib/import/context';
 import { collectLinkContext, isSlowPath } from '../lib/import/platforms';
 import { parseRecipe } from '../lib/import/parse-recipe';
 
@@ -91,7 +91,7 @@ app.http('import-recipe', {
       return json(200, { import_id: id, recipe: cached.recipe, warnings: cached.warnings, cached: true });
     }
 
-    const platform = (await import('../lib/import/context')).detectPlatform(body.url);
+    const platform = detectPlatform(body.url);
     await setJob(id, { platform, status: 'scraping' });
 
     if (isSlowPath(platform)) {

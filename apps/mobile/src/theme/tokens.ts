@@ -27,6 +27,9 @@ export const colors = {
   bonus: '#F6C445',
   bonusText: '#3A2E10',
   borderSubtle: 'rgba(34,48,30,0.10)',
+  /** aliases used by data-driven screens */
+  border: 'rgba(34,48,30,0.10)',
+  danger: '#B3261E',
 } as const;
 
 export const radius = {
@@ -34,6 +37,8 @@ export const radius = {
   control: 14,
   pill: 999,
   tabBar: 32,
+  md: 12,
+  lg: 16,
 } as const;
 
 export const shadows = {
@@ -81,6 +86,11 @@ export const type = {
   tabLabelActive: { fontFamily: fonts.bodyBold, fontSize: 10, color: colors.primary },
   tabLabelInactive: { fontFamily: fonts.bodyMedium, fontSize: 10, color: colors.textInactive },
   chip: { fontFamily: fonts.bodyMedium, fontSize: 13, color: colors.textSoft },
+  /** aliases for content screens (detail/cook/list) */
+  h1: { fontFamily: fonts.display, fontSize: 26, lineHeight: 30, color: colors.text },
+  h2: { fontFamily: fonts.bodySemiBold, fontSize: 17, color: colors.text },
+  h3: { fontFamily: fonts.bodySemiBold, fontSize: 15, color: colors.text },
+  body: { fontFamily: fonts.body, fontSize: 15, lineHeight: 21, color: colors.text },
 } as const;
 
 /** Icon defaults — Lucide-style stroke icons (docs/04 §1). */
