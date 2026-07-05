@@ -1,7 +1,13 @@
 -- 0007 — read-only backup role for the nightly logical dump (WS1 durability).
--- prakkie_backup is created by scripts/db-migrate.mjs (password from Key Vault);
--- it can SELECT everything and write nothing — the dump timer in the ingest app
--- is its only user.
+-- Created NOLOGIN here; scripts/db-migrate.mjs grants LOGIN + the Key Vault
+-- password once the backup timer ships (deferred by owner 2026-07-06). It can
+-- SELECT everything and write nothing.
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'prakkie_backup') THEN
+    CREATE ROLE prakkie_backup NOLOGIN;
+  END IF;
+END $$;
 
 GRANT USAGE ON SCHEMA app, catalog, discovery TO prakkie_backup;
 GRANT SELECT ON ALL TABLES IN SCHEMA app TO prakkie_backup;
