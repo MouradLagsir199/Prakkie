@@ -1,0 +1,14 @@
+{
+  "name": "prakkie",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@11.10.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r --parallel exec tsc --noEmit",
+    "test": "pnpm -r --parallel test",
+    "lint": "pnpm -r --parallel lint"
+  }
+}

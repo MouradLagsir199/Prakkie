@@ -1,0 +1,10 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "PG_CONNECTION_STRING": "<from Key Vault — never commit real values>",
+    "APIFY_API_TOKEN": "<from Key Vault>",
+    "OPENAI_API_KEY": "<from Key Vault>"
+  }
+}

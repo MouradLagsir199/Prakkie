@@ -1,0 +1,21 @@
+{
+  "name": "@prakkie/functions-api",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/src/functions/*.js",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "start": "func start",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.6.0",
+    "@prakkie/shared": "workspace:*",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
