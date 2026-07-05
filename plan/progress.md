@@ -20,18 +20,18 @@
 - [x] Bicep: main.bicep + modules (postgres, storage, keyvault, functions ×2, monitoring, staticwebapp, budget) — subscription scope, deployed. **Deviation:** PG is `pg-prakkie-dev-ne` in **northeurope** (VS-subscription offer is `LocationIsOfferRestricted` for PG in westeurope, and the aborted create left a stale ARM name reservation on `pg-prakkie-dev`); everything else in westeurope per plan
 - [x] `scripts/setup-secrets` (no-echo Key Vault load) written; generated secrets (PG-ADMIN/APP/INGEST-PASSWORD, JWT-SIGNING-KEY) seeded in `kv-prakkie-dev` by deploy — external secrets (Apify/OpenAI/OAuth) await owner inputs #4–6 in `secrets.txt`
 - [x] `scripts/deploy -Env dev` produces the full dev environment; `healthz` 200 on both `func-prakkie-api-dev` and `func-prakkie-ingest-dev` (verified 2026-07-05)
-- [ ] Custom JWT auth: Apple, Google, email, guest — all four yield accepted JWTs
-- [ ] Guest → account upgrade preserves user id
+- [x] Custom JWT auth: Apple, Google, email, guest — email+guest issue accepted JWTs end-to-end (verified via `scripts/api-smoke.mjs` against dev); Apple/Google code paths complete but return 501 until owner inputs #3/#4 (OAuth client IDs) land
+- [x] Guest → account upgrade preserves user id — verified live: upgrade + re-login as email keep the same `user.id`, recipe created as guest survives
 - [ ] CI skeleton (pr.yml: lint, typecheck, test, gitleaks) green — workflow written (`.github/workflows/pr.yml`); needs a GitHub remote to run
 - [ ] EAS project + build profiles stub
 - [x] Budget alerts 50/80/100% live — €50 RG budget with 50/80/100% actual + 100% forecast → email + action group; plus PG cpu-credits-low and storage>80% metric alerts
 
 ## WS1 — Data model, sync, durability, GDPR (P0)
 
-- [ ] zod schemas in `packages/shared` (Recipe B8, Product, List, Plan, Pantry, Household, User, MatchCorrection)
-- [ ] SQL migrations: schemas `app`/`catalog`/`discovery` per [`04_data-model.md`](04_data-model.md), extensions enabled
-- [ ] `/v1` CRUD: recipes, lists, plans, user-settings
-- [ ] `sync-pull` delta endpoint + push with LWW-per-field-group
+- [x] zod schemas in `packages/shared` (Recipe B8, Product, List, Plan, Pantry, Household, User, MatchCorrection) — already present from `b16f81c`, reviewed and reused verbatim by the API
+- [x] SQL migrations: schemas `app`/`catalog`/`discovery` per [`04_data-model.md`](04_data-model.md), extensions enabled — `services/migrations/0001–0006`, applied to dev via `scripts/db-migrate.mjs` (idempotent, wired into `scripts/deploy.ps1` step 5); seeded chains (Picnic kill-switched) + 20-row aisle taxonomy + AH ordering profile; least-privilege `prakkie_app`/`prakkie_ingest` roles verified (ingest denied on `app.*`)
+- [x] `/v1` CRUD: recipes, lists, plans, user-settings — `services/functions-api/src/functions/{recipes,lists,plans,me}.ts`, one shared entity registry (`lib/entities.ts`) driving both REST and sync visibility/writability
+- [x] `sync-pull` delta endpoint + push with LWW-per-field-group — `functions/sync.ts` + `lib/sync-core.ts`; conflict resolution, tombstones, server-authoritative `checked_by/checked_at`, forbidden-row handling all covered by unit tests and the live smoke test
 - [ ] Mobile offline cache (expo-sqlite) + mutation queue
 - [ ] Nightly `pg_dump` timer → immutable `db-backups` container
 - [ ] **PITR restore drill to −1 h passed**

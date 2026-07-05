@@ -6,6 +6,7 @@ param role string
 param storageAccountName string
 param keyVaultName string
 param appInsightsConnectionString string
+param pgHost string
 
 var appName = 'func-prakkie-${role}-${env}'
 // KV secret names per plan/06_iac.md §3 #3: PG-APP-PASSWORD (api app) / PG-INGEST-PASSWORD
@@ -51,6 +52,9 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'KEY_VAULT_NAME', value: keyVaultName }
         // Separate Durable task hub per app (ADR-0003); also used by host.json via %TASK_HUB_NAME%
         { name: 'TASK_HUB_NAME', value: 'prakkie${role}${env}' }
+        { name: 'PG_HOST', value: pgHost }
+        { name: 'PG_DATABASE', value: 'prakkie' }
+        { name: 'PG_USER', value: role == 'api' ? 'prakkie_app' : 'prakkie_ingest' }
         // KV references resolve at runtime once scripts/deploy has seeded the secrets
         { name: 'JWT_SIGNING_KEY', value: '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=JWT-SIGNING-KEY)' }
         { name: 'PG_PASSWORD', value: '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=${pgSecretName})' }

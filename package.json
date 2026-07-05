@@ -12,6 +12,7 @@
     "lint": "pnpm -r --parallel lint"
   },
   "devDependencies": {
-    "esbuild": "^0.28.1"
+    "esbuild": "^0.28.1",
+    "pg": "^8.16.0"
   }
 }

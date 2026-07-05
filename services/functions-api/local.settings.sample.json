@@ -3,7 +3,13 @@
   "Values": {
     "AzureWebJobsStorage": "UseDevelopmentStorage=true",
     "FUNCTIONS_WORKER_RUNTIME": "node",
-    "PG_CONNECTION_STRING": "<from Key Vault — never commit real values>",
+    "PG_HOST": "pg-prakkie-dev-ne.postgres.database.azure.com",
+    "PG_DATABASE": "prakkie",
+    "PG_USER": "prakkie_app",
+    "PG_PASSWORD": "<from Key Vault PG-APP-PASSWORD — never commit real values>",
+    "JWT_SIGNING_KEY": "<from Key Vault JWT-SIGNING-KEY>",
+    "APPLE_CLIENT_IDS": "",
+    "GOOGLE_CLIENT_IDS": "",
     "APIFY_API_TOKEN": "<from Key Vault>",
     "OPENAI_API_KEY": "<from Key Vault>"
   }

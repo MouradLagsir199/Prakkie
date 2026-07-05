@@ -73,6 +73,7 @@ module functionsApi 'modules/functions.bicep' = {
     storageAccountName: storage.outputs.storageAccountName
     keyVaultName: keyvault.outputs.keyVaultName
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
+    pgHost: postgres.outputs.fullyQualifiedDomainName
   }
 }
 
@@ -86,6 +87,7 @@ module functionsIngest 'modules/functions.bicep' = {
     storageAccountName: storage.outputs.storageAccountName
     keyVaultName: keyvault.outputs.keyVaultName
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
+    pgHost: postgres.outputs.fullyQualifiedDomainName
   }
 }
 

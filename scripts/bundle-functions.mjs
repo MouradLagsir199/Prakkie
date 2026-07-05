@@ -21,8 +21,9 @@ await build({
   platform: 'node',
   target: 'node20',
   format: 'cjs',
-  // provided by the Functions host's node worker at runtime
-  external: ['@azure/functions-core'],
+  // @azure/functions-core is provided by the Functions host's node worker;
+  // pg-native is pg's optional native binding (never installed — try/catch'd require)
+  external: ['@azure/functions-core', 'pg-native'],
   outdir: join(appDir, '.publish', 'dist', 'src', 'functions'),
   logLevel: 'info',
 });

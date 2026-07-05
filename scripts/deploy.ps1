@@ -175,7 +175,9 @@ if (Test-Path (Join-Path $repoRoot 'apps/web/package.json')) {
 
 # --- 5. migrations ---
 if (Test-Path (Join-Path $repoRoot 'services/migrations')) {
-    Write-Host "`n--- migrations: services/migrations found, wire runner here (WS1) ---"
+    Write-Host "`n--- migrations ---"
+    node (Join-Path $PSScriptRoot 'db-migrate.mjs') --env $Env
+    if ($LASTEXITCODE -ne 0) { throw 'migrations failed' }
 }
 
 Write-Host "`nDeploy [$Env] complete."
