@@ -14,17 +14,17 @@
 
 ## WS0 — Foundations (infra, auth, Key Vault)
 
-- [x] `.gitignore` (secrets.txt, .env*, local.settings.json, .azure/) as the **first commit** (root commit `48b98b6`; `secrets.txt` verified ignored) — pre-commit no-secrets hook still to add with the scaffold
+- [x] `.gitignore` (secrets.txt, .env*, local.settings.json, .azure/) as the **first commit** (root commit `48b98b6`; `secrets.txt` verified ignored) — pre-commit no-secrets hook added (`scripts/check-no-secrets.sh` via `core.hooksPath=.githooks`, verified it blocks a staged `.env`)
 - [x] Monorepo scaffold (pnpm workspaces; apps/mobile, services/functions-api+ingest with healthz, packages/shared+matching; typecheck + tests green) — commit `b16f81c`. Still to scaffold: apps/web, infra/, .github/workflows
 - [x] Design tokens from docs/04 §1 → `apps/mobile/src/theme/tokens.ts` (verbatim values)
-- [ ] Bicep: main.bicep + modules (postgres, storage, keyvault, functions ×2, monitoring, staticwebapp, budget)
-- [ ] `scripts/setup-secrets` (no-echo Key Vault load) written & run for dev
-- [ ] `scripts/deploy -Env dev` produces the full dev environment; `healthz` 200
+- [x] Bicep: main.bicep + modules (postgres, storage, keyvault, functions ×2, monitoring, staticwebapp, budget) — subscription scope, deployed. **Deviation:** PG is `pg-prakkie-dev-ne` in **northeurope** (VS-subscription offer is `LocationIsOfferRestricted` for PG in westeurope, and the aborted create left a stale ARM name reservation on `pg-prakkie-dev`); everything else in westeurope per plan
+- [x] `scripts/setup-secrets` (no-echo Key Vault load) written; generated secrets (PG-ADMIN/APP/INGEST-PASSWORD, JWT-SIGNING-KEY) seeded in `kv-prakkie-dev` by deploy — external secrets (Apify/OpenAI/OAuth) await owner inputs #4–6 in `secrets.txt`
+- [x] `scripts/deploy -Env dev` produces the full dev environment; `healthz` 200 on both `func-prakkie-api-dev` and `func-prakkie-ingest-dev` (verified 2026-07-05)
 - [ ] Custom JWT auth: Apple, Google, email, guest — all four yield accepted JWTs
 - [ ] Guest → account upgrade preserves user id
-- [ ] CI skeleton (pr.yml: lint, typecheck, test, gitleaks) green
+- [ ] CI skeleton (pr.yml: lint, typecheck, test, gitleaks) green — workflow written (`.github/workflows/pr.yml`); needs a GitHub remote to run
 - [ ] EAS project + build profiles stub
-- [ ] Budget alerts 50/80/100% live
+- [x] Budget alerts 50/80/100% live — €50 RG budget with 50/80/100% actual + 100% forecast → email + action group; plus PG cpu-credits-low and storage>80% metric alerts
 
 ## WS1 — Data model, sync, durability, GDPR (P0)
 
@@ -165,8 +165,8 @@
 
 ## Inputs from owner (see [`10_inputs-needed.md`](10_inputs-needed.md))
 
-- [ ] 1 · Azure subscription ID + RG naming sign-off
-- [ ] 2 · Deploy identity (az login / OIDC service principal)
+- [x] 1 · Azure subscription ID + RG naming sign-off — deployed to owner's subscription via `az login` context; RGs `prakkie-dev`/`prakkie-prod` per plan (owner delegated naming 2026-07-05)
+- [x] 2 · Deploy identity — owner `az login` used for first deploys; GitHub OIDC service principal still recommended once CI deploys (see input list)
 - [ ] 3 · Apple Developer + Google Play accounts
 - [ ] 4 · Apple/Google OAuth client IDs + secrets
 - [ ] 5 · Apify account/actors confirmed

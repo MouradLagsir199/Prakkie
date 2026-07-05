@@ -10,6 +10,7 @@ local.settings.json
 node_modules/
 dist/
 build/
+.publish/
 .expo/
 *.tsbuildinfo
 

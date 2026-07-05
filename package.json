@@ -10,5 +10,8 @@
     "typecheck": "pnpm -r --parallel exec tsc --noEmit",
     "test": "pnpm -r --parallel test",
     "lint": "pnpm -r --parallel lint"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1"
   }
 }
