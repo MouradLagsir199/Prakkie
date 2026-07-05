@@ -10,13 +10,13 @@
 - [x] D3 backend decided — 2× Azure Functions Consumption + Durable Functions video tail
 - [x] D4 repo layout decided — pnpm monorepo
 - [x] Plan approved by owner
-- [ ] ADR files committed to `docs/adr/` (0001 storage, 0002 bicep, 0003 two apps, 0004 auth)
+- [x] ADR files committed to `docs/adr/` (0001 storage, 0002 bicep, 0003 two apps, 0004 auth) — commit `b16f81c`
 
 ## WS0 — Foundations (infra, auth, Key Vault)
 
 - [x] `.gitignore` (secrets.txt, .env*, local.settings.json, .azure/) as the **first commit** (root commit `48b98b6`; `secrets.txt` verified ignored) — pre-commit no-secrets hook still to add with the scaffold
-- [ ] Monorepo scaffold (apps/mobile, apps/web, services/functions-api, services/functions-ingest, packages/*, infra/, scripts/)
-- [ ] Design tokens from docs/04 §1 → `apps/mobile/src/theme/tokens.ts`
+- [x] Monorepo scaffold (pnpm workspaces; apps/mobile, services/functions-api+ingest with healthz, packages/shared+matching; typecheck + tests green) — commit `b16f81c`. Still to scaffold: apps/web, infra/, .github/workflows
+- [x] Design tokens from docs/04 §1 → `apps/mobile/src/theme/tokens.ts` (verbatim values)
 - [ ] Bicep: main.bicep + modules (postgres, storage, keyvault, functions ×2, monitoring, staticwebapp, budget)
 - [ ] `scripts/setup-secrets` (no-echo Key Vault load) written & run for dev
 - [ ] `scripts/deploy -Env dev` produces the full dev environment; `healthz` 200
@@ -82,7 +82,9 @@
 
 ## WS4 — App shell, 5 tabs, library, cook mode + plumbing
 
-- [ ] App shell: 4-tab floating pill bar + green FAB (docs/04 §2)
+- [x] App shell: 4-tab floating pill bar + green FAB (docs/04 §2) — Expo SDK 57, expo-router tabs, Young Serif + Instrument Sans loaded; verified via `expo export` (all routes bundle)
+- [x] Recepten library first version on fixture data (mockup 01: header/search/chips/sort/2-col grid, Bonus-tip + price pills) — pixel review + real data pending
+- [x] Import sheet skeleton (title, 4 options, share-sheet footer) — clipboard-detection card + live flow pending (WS3/WS4)
 - [ ] Onboarding (A3: 11-chain multi-select, language/units, household size, first-import aha)
 - [ ] Recepten library grid = mockup 01 (incl. `RecipeCardGrid` as reusable prop-driven component)
 - [ ] Filter/sort = mockup 02 (exact sort list, alle/één-van ingredient filter)
