@@ -12,6 +12,7 @@
   "dependencies": {
     "@azure/functions": "^4.6.0",
     "@noble/hashes": "^1.7.0",
+    "@prakkie/matching": "workspace:*",
     "@prakkie/shared": "workspace:*",
     "jose": "^5.9.0",
     "pg": "^8.16.0",

@@ -37,7 +37,7 @@ const outDir = mkdtempSync(join(tmpdir(), 'prakkie-ingest-'));
 const entry = join(repoRoot, 'services/functions-ingest/src/lib/ingest.ts');
 const connectorsEntry = join(repoRoot, 'services/functions-ingest/src/connectors/index.ts');
 execSync(
-  `npx esbuild "${entry}" "${connectorsEntry}" --bundle --platform=node --format=esm --outdir="${outDir}" --external:pg`,
+  `npx esbuild "${entry}" "${connectorsEntry}" --bundle --platform=node --format=cjs --outdir="${outDir}" --external:pg-native`,
   { cwd: repoRoot, stdio: 'inherit' }
 );
 

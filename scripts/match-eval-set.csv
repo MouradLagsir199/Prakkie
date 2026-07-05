@@ -1,0 +1,92 @@
+item,expect,forbid
+ui,\bui(en)?\b,\b(bos|zilver|gebakken|augurk|rode|jus|soep|saus|kaas|filet|gehakt)\b
+rode ui,rode ui(en)?\b,\b(zoetzure|marinade|pizza|dip|chutney)\b
+knoflook,knoflook,\b(saus|poeder|pers|olie|croutons)\b
+bosui,bosui,
+prei,\bprei\b,\b(soep|schotel)\b
+tomaat,\btoma(at|ten)\b,\b(puree|blokjes|soep|ketchup|gezeefd|passata|zongedroogd|saus|hummus|aioli|salade|quiche|kopsoep)\b
+cherrytomaat,cherrytoma(at|ten|atjes)|snoeptoma|cherry ?toma,\b(lolly)\b
+gezeefde tomaten,gezeefde? tomaten|tomaten gezeefd|passata,
+tomatenblokjes,tomatenblokjes|tomaten blokjes|gesneden tomaten|tomaten in (blokjes|stukjes),
+tomatenpuree,tomatenpuree,
+paprika,\bpaprika('s)?\b,\b(poeder|chips|saus|mix|gevuld|pizzabrood)\b
+courgette,courgettes?,\b(spaghetti|soep)\b
+aubergine,aubergines?,
+broccoli,broccoli,\b(soep|rijst)\b
+bloemkool,bloemkool,\b(rijst|soep)\b
+spinazie,spinazie,\b(a la creme|à la crème)\b
+komkommer,komkommers?,
+wortel,\b(wortel(s|en|tjes)?|winterpeen|bospeen)\b,\b(sap|taart)\b
+aardappel,\baardappel(en|s)?\b,\b(schijfjes|puree|salade|chips|krieltjes|anders|kruidenmix|zoete)\b
+zoete aardappel,zoete aardappel(en|s)?\b,\b(friet|blokjes|partjes|puree|unox|smaakfavoriet)\b
+champignons,champignons?,\b(soep|saus)\b
+citroen,\bcitroen(en)?\b,\b(sap|gras|melisse|zuur|limonade|afwasmiddel|verfrisser|kogels|clear|rivella)\b
+limoen,\blimoen(en)?\b,\b(sap|blad|afwasmiddel|vitaminewater|hoemoes|siroop)\b
+appel,\bappels?\b|\belstar\b|\bjonagold\b,\b(moes|sap|taart|stroop|azijn|aard)\b
+banaan,\bbana(an|nen)\b,\b(chips|brood|protein|maaza)\b
+avocado,avocado('s)?,
+gember,\bgember\b,\b(poeder|bier|thee|snoep)\b
+rode peper,rode pepers?|spaanse pepers?,
+melk,\bmelk\b,\b(karne|choco|amandel|haver|kokos|soja|poeder|geiten)\b
+halfvolle melk,halfvolle melk,
+slagroom,slagroom,
+creme fraiche,crème fraîche|creme fraiche,
+yoghurt,yoghurt,\b(drink|griekse stijl)\b
+griekse yoghurt,griekse yoghurt|yoghurt griekse stijl,
+roomboter,roomboter,
+eieren,\beieren\b|scharreleieren|\beitjes\b,\b(chocolade|paas)\b
+geraspte kaas,geraspte? kaas|kaas geraspt,
+jonge kaas,jong(e|belegen)? ?kaas|goudse jong,
+parmezaan,parmezaanse? kaas|parmigiano|grana padano,
+mozzarella,mozzarella,
+feta,\bfeta\b|witte kaas,
+kipfilet,kipfilets?|kip ?filet,\b(gerookt|beleg|blokjes)\b
+kippendij,kippendij|dijfilet|kip dij,
+gehakt,\bgehakt\b,\b(vegetarisch|vega|kruiden|met ui)\b
+rundergehakt,rundergehakt,
+spekreepjes,spekreepjes|spekblokjes,
+chorizo,chorizo,
+zalm,\bzalm\b,\b(gerookt|salade|beleg)\b
+garnalen,garnalen,
+tonijn,tonijn,\b(salade|pizza)\b
+tofu,\btofu\b|\btahoe\b,
+kikkererwten,kikkererwten,
+linzen,linzen,\b(soep|schotel)\b
+zwarte bonen,zwarte bonen,
+kidneybonen,kidneybonen|rode nierbonen,
+rijst,\brijst\b,\b(wafel|melk|azijn)\b
+basmatirijst,basmati ?rijst,
+spaghetti,spaghetti,
+penne,\bpenne\b,
+noedels,noedels|noodles|\bmie\b,
+couscous,couscous,
+quinoa,quinoa,
+bloem,\bbloem\b|tarwebloem|patentbloem,\bbloemkool\b
+suiker,\bsuiker\b,\b(basterd|poeder|vanille|riet|klontjes)\b
+olijfolie,olijfolie,
+zonnebloemolie,zonnebloemolie,
+azijn,\bazijn\b,
+sojasaus,sojasaus|ketjap,
+sambal,sambal,
+mosterd,mosterd,\b(saus|soep)\b
+mayonaise,mayonaise,
+kokosmelk,kokosmelk,
+groentebouillon,groentebouillon,
+kippenbouillon,kippenbouillon,
+paprikapoeder,paprikapoeder,
+komijn,komijn,
+kerrie,kerrie|curry ?poeder|currypoeder|kerriepoeder,\b(saus|soep|ketchup)\b
+kurkuma,kurkuma|geelwortel,
+kaneel,kaneel,\b(broodje|beschuit)\b
+oregano,oregano,
+basilicum,basilicum,\b(saus|pesto)\b
+peterselie,peterselie,
+koriander,koriander,
+tijm,\btijm\b,
+laurier,laurier(blad)?,
+honing,honing,\b(mosterd)\b
+pindakaas,pindakaas,
+doperwten,doperwten,
+bladerdeeg,bladerdeeg,
+witte wijn,witte wijn,\b(azijn|saus)\b
+kookroom,kookroom,

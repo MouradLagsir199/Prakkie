@@ -158,6 +158,9 @@ importers:
       '@noble/hashes':
         specifier: ^1.7.0
         version: 1.8.0
+      '@prakkie/matching':
+        specifier: workspace:*
+        version: link:../../packages/matching
       '@prakkie/shared':
         specifier: workspace:*
         version: link:../../packages/shared
