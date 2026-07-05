@@ -6,7 +6,7 @@ import { connectorFor } from '../connectors';
 import { ingestChain } from '../lib/ingest';
 
 /**
- * POST /api/admin/catalog-ingest  (function-key protected)
+ * POST /api/ops/catalog-ingest  (function-key protected)
  * body: { chain: string, blobPath: string, sweep?: boolean }
  *
  * The nightly scrape (scrapers/*.py) uploads bronze JSONL to the raw-snapshots
@@ -16,7 +16,7 @@ import { ingestChain } from '../lib/ingest';
 app.http('catalog-ingest', {
   methods: ['POST'],
   authLevel: 'function',
-  route: 'admin/catalog-ingest',
+  route: 'ops/catalog-ingest',
   handler: async (req, ctx) => {
     const body = (await req.json().catch(() => null)) as {
       chain?: string;

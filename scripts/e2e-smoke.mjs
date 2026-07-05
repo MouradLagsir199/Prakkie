@@ -119,5 +119,76 @@ const ahBest = match.body.matches?.ah?.best;
 check('match: passata → gezeefde tomaten (lexicon alias)', match.status === 200 && !!ahBest && /gezeefde|passata/i.test(ahBest.name),
   ahBest ? `"${ahBest.name}" (${ahBest.source})` : 'no match');
 
-console.log(failures ? `\n${failures} FAILED` : '\nAll e2e spine checks passed.');
+// 8. Ontdek feed (WS7) — crawled corpus + save-flow detail
+const feed = await jfetch('/v1/discover?limit=10', {}, token);
+check('discover feed has crawled recipes', feed.status === 200 && (feed.body.items?.length ?? 0) > 0,
+  `${feed.body.items?.length} items, first: "${feed.body.items?.[0]?.title}" via ${feed.body.items?.[0]?.site_name}`);
+if (feed.body.items?.length) {
+  const detail = await jfetch(`/v1/discover/${feed.body.items[0].id}`, {}, token);
+  check('discover detail returns full recipe for review flow',
+    detail.status === 200 && detail.body.recipe?.ingredients?.length >= 2 && detail.body.recipe?.origin === 'crawled_save',
+    `${detail.body.recipe?.ingredients?.length} ing`);
+  const search = await jfetch('/v1/discover?q=pasta', {}, token);
+  check('ook-in-Ontdek zoeken answers', search.status === 200, `${search.body.items?.length ?? 0} hits for "pasta"`);
+}
+
+// 9. households (WS9 K1): create → invite → second user joins → sees the recipe
+const hh = await jfetch('/v1/households', { method: 'POST', body: JSON.stringify({ name: 'e2e huis' }) }, token);
+check('household create', hh.status === 201 && !!hh.body.id, hh.body.name);
+const invite = await jfetch(`/v1/households/${hh.body.id}/invite`, { method: 'POST', body: '{}' }, token);
+check('household invite issues token + deep link', invite.status === 200 && !!invite.body.invite_token && invite.body.deep_link?.startsWith('prakkie://'));
+// move the recipe into the household, then a second account joins and pulls it
+await jfetch('/v1/sync/push', {
+  method: 'POST',
+  body: JSON.stringify({ mutations: [{ entity: 'recipes', op: 'upsert', id: rid, base_updated_at: null, fields: { household_id: hh.body.id } }] }),
+}, token);
+const auth2 = await jfetch('/v1/auth/guest', { method: 'POST', body: JSON.stringify({ platform: 'ios' }) });
+const token2 = auth2.body.access_token;
+const join = await jfetch('/v1/households/join', { method: 'POST', body: JSON.stringify({ token: invite.body.invite_token }) }, token2);
+check('second user joins household', join.status === 200 && join.body.id === hh.body.id);
+const pull2 = await jfetch('/v1/sync?entities=recipes', {}, token2);
+check('household member sees shared recipe via sync', pull2.status === 200 &&
+  (pull2.body.changes?.recipes?.rows ?? []).some((r) => r.id === rid),
+  `${pull2.body.changes?.recipes?.rows?.length ?? 0} recipes visible`);
+
+// 10. share link (K3) + cart handoff (L1/L2) + pantry (WS8)
+const share = await jfetch(`/v1/recipes/${rid}/share`, { method: 'POST', body: '{}' }, token);
+check('recipe share link', share.status === 200 && !!share.body.share_token);
+const shared = await jfetch(`/v1/shared/${share.body.share_token}`, {}, token2);
+check('share token resolves for other user (origin shared)', shared.status === 200 && shared.body.recipe?.origin === 'shared',
+  `"${shared.body.recipe?.title}"`);
+const handoff = await jfetch(`/v1/lists/${lid}/handoff?chain=ah`, {}, token);
+check('cart handoff: AH deep links + copy fallback', handoff.status === 200 && handoff.body.mode === 'deep_links' && handoff.body.copy_text?.length > 0,
+  `${handoff.body.product_links?.length ?? 0} links`);
+const handoff2 = await jfetch(`/v1/lists/${lid}/handoff?chain=vomar`, {}, token);
+check('cart handoff degrades honestly for other chains', handoff2.status === 200 && handoff2.body.mode === 'copy_list');
+
+await jfetch('/v1/sync/push', {
+  method: 'POST',
+  body: JSON.stringify({ mutations: [
+    { entity: 'pantry_items', op: 'upsert', id: crypto.randomUUID(), base_updated_at: null, fields: { name: 'ui', source: 'manual' } },
+    { entity: 'pantry_items', op: 'upsert', id: crypto.randomUUID(), base_updated_at: null, fields: { name: 'knoflook', source: 'manual' } },
+  ] }),
+}, token);
+const pantry = await jfetch('/v1/pantry/cook-suggestions', {}, token);
+check('cook-from-pantry ranks own library by fewest missing', pantry.status === 200 && (pantry.body.suggestions?.length ?? 0) > 0
+  && pantry.body.suggestions[0].missing_count <= (pantry.body.suggestions.at(-1)?.missing_count ?? 99),
+  `pantry=${pantry.body.pantry_size}, top miss ${pantry.body.suggestions?.[0]?.missing_count}/${pantry.body.suggestions?.[0]?.total}`);
+
+// 11. match-fix correction wins on the next match (E5 instant tier)
+const before = await jfetch('/v1/match?item=ui&chains=ah', {}, token);
+const shortlisted = before.body.matches?.ah?.best;
+if (shortlisted) {
+  const altSku = shortlisted.sku_id;
+  await jfetch('/v1/sync/push', {
+    method: 'POST',
+    body: JSON.stringify({ mutations: [{ entity: 'match_corrections', op: 'upsert', id: crypto.randomUUID(), base_updated_at: null,
+      fields: { chain_id: 'ah', item_normalised: 'ui', chosen_sku_id: altSku } }] }),
+  }, token);
+  const after = await jfetch('/v1/match?item=ui&chains=ah', {}, token);
+  check('user correction becomes the instant top match', after.body.matches?.ah?.best?.source === 'correction'
+    && after.body.matches?.ah?.best?.sku_id === altSku);
+}
+
+console.log(failures ? `\n${failures} FAILED` : '\nAll e2e checks passed (spine + WS7/WS8/WS9).');
 process.exit(failures ? 1 : 0);

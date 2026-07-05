@@ -7,7 +7,7 @@ INSERT INTO discovery.crawl_sources (domain, name, sitemap_url, cadence, robots_
   ('plus.nl',              'PLUS Recepten',       'https://www.plus.nl/sitemap-recipe.xml',                     'weekly', '{"include": "/recept"}'),
   ('smulweb.nl',           'Smulweb',             'https://www.smulweb.nl/sitemap.xml',                         'weekly', '{"include": "/recepten/"}'),
   ('leukerecepten.nl',     'Leukerecepten',       'https://www.leukerecepten.nl/sitemap.xml',                   'weekly', '{"include": "/recepten/"}'),
-  ('lekkerensimpel.com',   'Lekker en Simpel',    'https://www.lekkerensimpel.com/sitemap_index.xml',           'weekly', '{"include": "/gerecht"}'),
+  ('lekkerensimpel.com',   'Lekker en Simpel',    'https://www.lekkerensimpel.com/sitemap_index.xml',           'weekly', '{"include": ""}'),
   ('uitpaulineskeuken.nl', 'Uit Paulines Keuken', 'https://uitpaulineskeuken.nl/sitemap_index.xml',             'weekly', '{"include": "/recept"}'),
   ('24kitchen.nl',         '24Kitchen',           'https://www.24kitchen.nl/sitemap.xml',                       'weekly', '{"include": "/recepten/"}'),
   ('voedingscentrum.nl',   'Voedingscentrum',     'https://www.voedingscentrum.nl/sitemap.xml',                 'weekly', '{"include": "/recepten/"}')

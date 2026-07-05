@@ -42,6 +42,6 @@ app.timer('learning-loop-nightly', {
 app.http('learning-loop-run', {
   methods: ['POST'],
   authLevel: 'function',
-  route: 'admin/learning-loop',
+  route: 'ops/learning-loop',
   handler: async () => ({ status: 200, jsonBody: await runLearningLoop() }),
 });

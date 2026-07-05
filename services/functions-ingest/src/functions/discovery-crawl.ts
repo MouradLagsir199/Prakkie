@@ -10,7 +10,7 @@ import { query } from '../lib/db';
 app.http('discovery-crawl', {
   methods: ['POST'],
   authLevel: 'function',
-  route: 'admin/discovery-crawl',
+  route: 'ops/discovery-crawl',
   handler: async (req, ctx) => {
     const body = (await req.json().catch(() => ({}))) as { domain?: string; cap?: number };
     if (!body.domain) return { status: 400, jsonBody: { error: 'domain required' } };
