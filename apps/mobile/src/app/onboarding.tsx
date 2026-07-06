@@ -42,6 +42,7 @@ export default function Onboarding() {
     }
     await kv.setItem('prakkie.onboarded', '1');
     await kv.setItem('prakkie.homechain', selected[0] ?? 'ah').catch(() => {});
+    await kv.setItem('prakkie.mychains', JSON.stringify(selected.length ? selected : ['ah'])).catch(() => {});
     setBusy(false);
     router.replace('/import');
   }

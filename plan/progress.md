@@ -180,6 +180,15 @@
 - [x] **Sessie-races (single-flight)**: refresh-token roteert bij gebruik; parallelle 401's lieten de verliezer "sessie dood" concluderen en een gezonde sessie wipen (= stille identiteitsreset, elke ~15 min risico). ensureSession én 401-recovery zijn nu single-flight; e-mailaccounts worden nooit stil gewist.
 - [x] **Engine-races** (offline-engine, 12/12 vitest + live smoke): (a) edit tijdens in-flight push werd door removePending opgegeten en visueel teruggedraaid → supersede-detectie: nieuwere mutatie blijft in de queue, server-copy overschrijft de nieuwere optimistische rij niet, base schuift mee; (b) delete tijdens in-flight insert liet de server-rij wees achter (revive) → delete queue't nu ook bij in-flight insert; (c) concurrente sync()-calls dubbel-pushten de queue → geserialiseerd.
 - [x] **Alert.alert = stille no-op op react-native-web**: "Lijst verwijderen?"-bevestiging deed op web letterlijk niets. Nieuwe `lib/dialogs.ts` (confirmDialog/notice, web → window.confirm/alert) vervangt álle Alerts (7 schermen). Plannen-sheet kreeg "Van het menu halen" (long-press is op web onvindbaar).
+
+## Boodschappen v2 (2026-07-07) — zoek-eerst + "waar ga je halen?"
+
+- [x] Maand-kalender → week-strip: 7 dagen met puntjes, pijlen ← → per week, weeklabel = tik-naar-vandaag
+- [x] Per-supermarkt-chips/lijsten weg → één zoekbalk: /v1/match over álle Profiel-supers in één call, shortlists gemerged (relevantie-rang eerst, dáárbinnen goedkoopste eerst — puur prijs zette koekjes boven roomboter), keten-badge per rij; tap = op de lijst mét pin; "product later kiezen" kan altijd (offline-first)
+- [x] Item-keuze is nu cross-chain: gekozen keten = `preferred` in matches-jsonb (geen serverwijziging); lijstregel toont product + keten-dot + prijs
+- [x] "Waar ga je halen?"-kaart: alles-bij-X totaal per super (mist-n eerlijk erbij, voordeligste gemarkeerd) + **slim verdelen** over 2+ winkels met besparing t.o.v. beste enkele winkel; footnote "± schatting, jouw keuzes tellen exact"
+- [x] kv `prakkie.mychains` cache (onboarding/profiel schrijven, boodschappen leest; /v1/me blijft waarheid)
+- [x] Verificatie: tsc clean, expo web export clean, live multi-chain match-check (melk/roomboter, 3 ketens, 36 opties met prijs+foto)
 - [x] Prijzen: dode "Koken met aanbiedingen"-rail → conditioneel + echt (recepten × deals), lege staat met CTA
 - [x] Ontdek: laden ≠ geen-resultaat ≠ offline; 0-hits toont import-CTA
 - [x] Matcher: morfologische aliassen in zoektermen + `lexicon_products` rank-1 hints geseed (`scripts/seed-lexicon-hints.mjs`) — "ui"→uien i.p.v. "Gehakt met ui"

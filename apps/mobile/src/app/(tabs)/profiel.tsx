@@ -87,6 +87,7 @@ export default function ProfielScreen() {
     setChains(next);
     patchMe({ home_chain_ids: next.length ? next : ['ah'] });
     kv.setItem('prakkie.homechain', next[0] ?? 'ah').catch(() => {});
+    kv.setItem('prakkie.mychains', JSON.stringify(next.length ? next : ['ah'])).catch(() => {});
   }
 
   function bumpServings(delta: number) {
