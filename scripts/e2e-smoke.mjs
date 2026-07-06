@@ -132,15 +132,25 @@ check('week-tied list: week_start persists through sync', String(weekRow?.week_s
 
 // 9. variant pinning (owner UX): user switches product; pricing uses the pinned sku
 const itemsRes = await jfetch(`/v1/lists/${lid}/price?chains=ah`, {}, token);
-const firstMatched = (itemsRes.body.chains?.[0]?.lines ?? []).find((l) => l.matched);
-if (firstMatched) {
-  // pick a DIFFERENT product from the shortlist for that item
-  const itemRow = await jfetch(`/v1/sync?since=1970-01-01T00:00:00Z&entities=list_items`, {}, token);
-  const target = (itemRow.body.changes?.list_items?.rows ?? []).find((r) => r.id === firstMatched.item_id);
-  const term = encodeURIComponent(target?.item_normalised ?? target?.name ?? 'melk');
+const matchedLines = (itemsRes.body.chains?.[0]?.lines ?? []).filter((l) => l.matched);
+const allItemRows = await jfetch(`/v1/sync?since=1970-01-01T00:00:00Z&entities=list_items`, {}, token);
+// find any line whose shortlist offers a real alternative to pin
+let firstMatched = null;
+let target = null;
+let alternative = null;
+for (const line of matchedLines) {
+  const row = (allItemRows.body.changes?.list_items?.rows ?? []).find((r) => r.id === line.item_id);
+  const term = encodeURIComponent(row?.item_normalised ?? row?.name ?? '');
   const shortRes = await jfetch(`/v1/match?item=${term}&chains=ah`, {}, token);
-  const shortlist = shortRes.body.matches?.ah?.shortlist ?? [];
-  const alternative = shortlist.find((s) => s.sku_id !== firstMatched.sku_id);
+  const alt = (shortRes.body.matches?.ah?.shortlist ?? []).find((s) => s.sku_id !== line.sku_id);
+  if (alt) {
+    firstMatched = line;
+    target = row;
+    alternative = alt;
+    break;
+  }
+}
+if (firstMatched) {
   if (alternative) {
     await jfetch('/v1/sync/push', {
       method: 'POST',
