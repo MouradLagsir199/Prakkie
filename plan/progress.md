@@ -189,6 +189,14 @@
 - [x] "Waar ga je halen?"-kaart: alles-bij-X totaal per super (mist-n eerlijk erbij, voordeligste gemarkeerd) + **slim verdelen** over 2+ winkels met besparing t.o.v. beste enkele winkel; footnote "± schatting, jouw keuzes tellen exact"
 - [x] kv `prakkie.mychains` cache (onboarding/profiel schrijven, boodschappen leest; /v1/me blijft waarheid)
 - [x] Verificatie: tsc clean, expo web export clean, live multi-chain match-check (melk/roomboter, 3 ketens, 36 opties met prijs+foto)
+
+### v2.1 — owner-feedback (zelfde dag)
+
+- [x] Meer opties: SHORTLIST_SIZE 12→24 (server, deployed) + UI-cap 8→30 (zoek) / 30 (sheet) — "brood" nu 144 gemergde opties
+- [x] Sortering: púúr prijs laag→hoog (rang alleen tiebreak) — owner koos expliciet voor prijs boven relevantie-volgorde
+- [x] Gekozen product → producttitel wordt de itemnaam (zoek-add én pin); verrijking overschrijft de titel niet meer; subline "· door jou gekozen" zonder duplicatie
+- [x] "Alles bij X" grijs + zonder totaal wanneer de lijst daar niet compleet kan (regel betrouwbaar = gepind óf confidence ≥ 0.45); voordeligste-marker alleen op complete ketens; besparing t.o.v. beste complete keten
+- [x] Inhoud/gewicht per rij: "300 g · €3,30/kg" — pack-size zit niet in de catalogus maar wordt exact afgeleid uit prijs ÷ eenheidsprijs (live geverifieerd op sandwichspread)
 - [x] Prijzen: dode "Koken met aanbiedingen"-rail → conditioneel + echt (recepten × deals), lege staat met CTA
 - [x] Ontdek: laden ≠ geen-resultaat ≠ offline; 0-hits toont import-CTA
 - [x] Matcher: morfologische aliassen in zoektermen + `lexicon_products` rank-1 hints geseed (`scripts/seed-lexicon-hints.mjs`) — "ui"→uien i.p.v. "Gehakt met ui"

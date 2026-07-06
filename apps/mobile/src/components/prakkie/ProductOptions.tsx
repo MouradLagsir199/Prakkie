@@ -22,6 +22,37 @@ export interface ProductOption {
   promo_price_cents?: number | null;
   image_url?: string | null;
   confidence?: number;
+  /** inhoud/gewicht — 300 g sandwichspread is geen 450 g */
+  pack_size_value?: number | null;
+  pack_size_unit?: string | null;
+  unit_price_cents_per_std?: number | null;
+  std_unit?: string | null;
+}
+
+/** 0,3 kg → "300 g"; 1,5 l → "1,5 l" */
+function formatStdQty(qty: number, stdUnit: string): string {
+  const small: Record<string, string> = { kg: 'g', l: 'ml' };
+  if (qty < 1 && small[stdUnit]) {
+    return `${Math.round((qty * 1000) / 5) * 5} ${small[stdUnit]}`;
+  }
+  const rounded = Math.round(qty * 100) / 100;
+  return `${String(rounded).replace('.', ',')} ${stdUnit}`;
+}
+
+/** "300 g · €3,30/kg" — inhoud + eenheidsprijs, voor eerlijke vergelijking.
+ *  Zonder expliciete pack-size wordt de inhoud afgeleid uit de eenheidsprijs
+ *  (prijs ÷ prijs-per-kg) — dat is exact, want zo is die prijs ook berekend. */
+export function packLabel(o: ProductOption): string | null {
+  const parts: string[] = [];
+  if (o.pack_size_value != null && o.pack_size_unit) {
+    parts.push(`${String(o.pack_size_value).replace('.', ',')} ${o.pack_size_unit}`);
+  } else if (o.unit_price_cents_per_std && o.std_unit && o.price_cents) {
+    parts.push(formatStdQty(o.price_cents / o.unit_price_cents_per_std, o.std_unit));
+  }
+  if (o.unit_price_cents_per_std != null && o.std_unit) {
+    parts.push(`${formatEuroCents(o.unit_price_cents_per_std)}/${o.std_unit}`);
+  }
+  return parts.length ? parts.join(' · ') : null;
 }
 
 /** Cross-chain variant (owner UX 2026-07-07): één zoekterm, álle geselecteerde
@@ -50,11 +81,11 @@ export function useCrossChainOptions(term: string | null, chains: readonly strin
         const merged = chainKey
           .split(',')
           .flatMap((c) => (body.matches[c]?.shortlist ?? []).map((o, rank) => ({ ...o, chain: c, rank })));
-        // eerst relevantie (beste match per keten), dáárbinnen goedkoopste eerst —
-        // puur op prijs zou "roomboter kersencarree" boven de echte roomboter zetten
+        // owner 2026-07-07: puur op prijs, laag → hoog; relevantie-rang alleen
+        // als tiebreak. Inhoud + eenheidsprijs per rij houden het eerlijk.
         merged.sort(
           (a, b) =>
-            a.rank - b.rank || (a.promo_price_cents ?? a.price_cents) - (b.promo_price_cents ?? b.price_cents)
+            (a.promo_price_cents ?? a.price_cents) - (b.promo_price_cents ?? b.price_cents) || a.rank - b.rank
         );
         if (live) setOptions(merged);
       })
@@ -88,7 +119,10 @@ export function CrossChainRow({
       )}
       <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
         <Text style={styles.name} numberOfLines={2}>{option.name}</Text>
-        {option.brand ? <Text style={styles.brand} numberOfLines={1}>{option.brand}</Text> : null}
+        {(() => {
+          const sub = [option.brand, packLabel(option)].filter(Boolean).join(' · ');
+          return sub ? <Text style={styles.brand} numberOfLines={1}>{sub}</Text> : null;
+        })()}
       </View>
       {brand ? (
         <View style={[styles.chainBadge, { backgroundColor: brand.bg }]}>
@@ -116,12 +150,13 @@ export function CrossChainOptions({
   chains,
   currentSku,
   onPick,
-  maxRows = 10,
+  maxRows = 30,
 }: {
   term: string | null;
   chains: readonly string[];
   currentSku?: string | null;
   onPick: (option: CrossChainOption) => void;
+  /** ruim: liever scrollen dan een optie missen (owner 2026-07-07) */
   maxRows?: number;
 }) {
   const [search, setSearch] = useState('');
@@ -187,7 +222,7 @@ export function ProductOptions({
   chain,
   currentSku,
   onPick,
-  maxRows = 12,
+  maxRows = 24,
   searchable = true,
 }: {
   term: string | null;
@@ -250,7 +285,10 @@ export function ProductOptions({
             )}
             <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
               <Text style={styles.name} numberOfLines={2}>{o.name}</Text>
-              {o.brand ? <Text style={styles.brand} numberOfLines={1}>{o.brand}</Text> : null}
+              {(() => {
+                const sub = [o.brand, packLabel(o)].filter(Boolean).join(' · ');
+                return sub ? <Text style={styles.brand} numberOfLines={1}>{sub}</Text> : null;
+              })()}
             </View>
             <View style={{ alignItems: 'flex-end', gap: 2 }}>
               {o.promo_price_cents != null && o.promo_price_cents < o.price_cents ? (

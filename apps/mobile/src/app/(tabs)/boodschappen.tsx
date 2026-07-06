@@ -208,15 +208,35 @@ export default function BoodschappenScreen() {
     return { cents, chosen, open: items.length - chosen };
   }, [items, linesByChain, myChains]);
 
-  // Waar ga je halen? — alles-bij-X per super + slim verdelen over winkels
+  // Waar ga je halen? — alles-bij-X per super + slim verdelen over winkels.
+  // Een regel telt alleen mee als de match betrouwbaar is (gepind of hoge
+  // confidence); kan de lijst niet compleet bij één super, dan wordt die
+  // grijs zonder totaal — een half totaal zou liegen.
+  const MIN_CONFIDENCE = 0.45;
   const storeAdvice = useMemo(() => {
     if (!pricing || items.length === 0) return null;
+    const reliableLine = (item: ItemRow, chain: string): PricedLine | null => {
+      const l = linesByChain.get(chain)?.get(item.id);
+      if (!l?.matched || l.line_price_cents == null) return null;
+      const pinnedHere = !!item.matches?.[chain]?.user_pinned;
+      return pinnedHere || (l.confidence ?? 0) >= MIN_CONFIDENCE ? l : null;
+    };
+
     const singles = myChains
-      .map((c) => pricing.find((p) => p.chain_id === c))
-      .filter((p): p is ChainPricing => !!p)
-      .sort((a, b) => a.unmatched.length - b.unmatched.length || a.total_cents - b.total_cents);
+      .filter((c) => linesByChain.has(c))
+      .map((c) => {
+        let total = 0;
+        let missing = 0;
+        for (const item of items) {
+          const l = reliableLine(item, c);
+          if (l) total += l.line_price_cents!;
+          else missing++;
+        }
+        return { chain_id: c, total_cents: total, missing, complete: missing === 0 };
+      })
+      .sort((a, b) => Number(b.complete) - Number(a.complete) || a.total_cents - b.total_cents || a.missing - b.missing);
     if (!singles.length) return null;
-    const best = singles[0]!;
+    const best = singles[0]!.complete ? singles[0]! : null;
 
     let split: { total: number; counts: Map<string, number>; missing: number } | null = null;
     if (myChains.length >= 2) {
@@ -226,9 +246,9 @@ export default function BoodschappenScreen() {
       for (const item of items) {
         let bestLine: { chain: string; cents: number } | null = null;
         for (const c of myChains) {
-          const l = linesByChain.get(c)?.get(item.id);
-          if (l?.matched && l.line_price_cents != null && (bestLine === null || l.line_price_cents < bestLine.cents)) {
-            bestLine = { chain: c, cents: l.line_price_cents };
+          const l = reliableLine(item, c);
+          if (l && (bestLine === null || l.line_price_cents! < bestLine.cents)) {
+            bestLine = { chain: c, cents: l.line_price_cents! };
           }
         }
         if (!bestLine) { missing++; continue; }
@@ -237,7 +257,7 @@ export default function BoodschappenScreen() {
       }
       split = { total, counts, missing };
     }
-    const savings = split ? best.total_cents - split.total : 0;
+    const savings = split && best ? best.total_cents - split.total : 0;
     return { singles, best, split, savings };
   }, [pricing, items, myChains, linesByChain]);
 
@@ -274,7 +294,8 @@ export default function BoodschappenScreen() {
     return id;
   }
 
-  /** zoek-eerst: op de lijst — mét productkeuze (tap op resultaat) of zonder. */
+  /** zoek-eerst: op de lijst — mét productkeuze (tap op resultaat) of zonder.
+   *  Bij een keuze wordt de producttitel de itemnaam (owner 2026-07-07). */
   async function addFromSearch(option?: CrossChainOption) {
     const typed = search.trim();
     if (!typed) return;
@@ -286,7 +307,7 @@ export default function BoodschappenScreen() {
       'list_items',
       {
         list_id: listId,
-        name: typed,
+        name: option ? option.name : typed,
         is_manual: true,
         ...(option
           ? { matches: { [option.chain]: { sku_id: option.sku_id, confidence: 1, user_pinned: true, preferred: true } } }
@@ -302,7 +323,8 @@ export default function BoodschappenScreen() {
       });
     }
     syncNow(['list_items', 'match_corrections']).catch(() => {});
-    // verrijking (hoeveelheid/schap/normalisatie) — offline blijft het item gewoon staan
+    // verrijking (hoeveelheid/schap/normalisatie op de gétypte term) — offline
+    // blijft het item gewoon staan; een gekozen producttitel blijft de naam
     try {
       const res = await authedRequest(`/v1/match?item=${encodeURIComponent(typed)}&chains=${myChains[0]}`);
       if (res.ok) {
@@ -313,7 +335,7 @@ export default function BoodschappenScreen() {
           'list_items',
           {
             list_id: listId,
-            name: body.quantity != null ? body.item : typed,
+            ...(option ? {} : { name: body.quantity != null ? body.item : typed }),
             quantity: body.quantity,
             unit: body.unit,
             item_normalised: body.item,
@@ -328,7 +350,9 @@ export default function BoodschappenScreen() {
     refreshPricing();
   }
 
-  /** productkeuze (cross-chain): de gekozen keten wordt dé keten van dit item. */
+  /** productkeuze (cross-chain): de gekozen keten wordt dé keten van dit item,
+   *  en de producttitel wordt de itemnaam. De correctie blijft op de oude
+   *  (ingrediënt-)term staan — daar leert de matcher van. */
   async function pinProduct(item: ItemRow, option: CrossChainOption) {
     const matches: Record<string, MatchEntry> = {};
     for (const [c, entry] of Object.entries(item.matches ?? {})) {
@@ -336,7 +360,7 @@ export default function BoodschappenScreen() {
       matches[c] = rest;
     }
     matches[option.chain] = { sku_id: option.sku_id, confidence: 1, user_pinned: true, preferred: true };
-    await upsertRow('list_items', { list_id: item.list_id, name: item.name, matches }, item.id);
+    await upsertRow('list_items', { list_id: item.list_id, name: option.name, matches }, item.id);
     await upsertRow('match_corrections', {
       chain_id: option.chain,
       item_normalised: item.item_normalised ?? item.name.toLowerCase(),
@@ -517,7 +541,7 @@ export default function BoodschappenScreen() {
                 Geen producten gevonden bij {myChains.map(chainName).join(', ')}.
               </Text>
             ) : (
-              searchOptions.slice(0, 8).map((o) => (
+              searchOptions.slice(0, 30).map((o) => (
                 <CrossChainRow key={`${o.chain}:${o.sku_id}`} option={o} onPick={(opt) => addFromSearch(opt)} />
               ))
             )}
@@ -572,7 +596,9 @@ export default function BoodschappenScreen() {
                             {!item.checked ? (
                               pinned && line?.product_name ? (
                                 <Text style={styles.subline} numberOfLines={1}>
-                                  {line.product_name} · {chainName(chain!)}{line.packs && line.packs > 1 ? ` · ${line.packs}×` : ''}
+                                  {/* naam ís meestal al de producttitel — niet dubbel tonen */}
+                                  {line.product_name !== item.name ? `${line.product_name} · ` : ''}
+                                  {chainName(chain!)} · door jou gekozen{line.packs && line.packs > 1 ? ` · ${line.packs}×` : ''}
                                 </Text>
                               ) : recipes.length ? (
                                 <Text style={styles.subline} numberOfLines={1}>uit: {recipes.join(' + ')}</Text>
@@ -615,18 +641,29 @@ export default function BoodschappenScreen() {
                 <Text style={styles.groupTitle}>WAAR GA JE HALEN?</Text>
                 <View style={styles.groupCard}>
                   {storeAdvice.singles.map((s, idx) => (
-                    <View key={s.chain_id} style={[styles.adviceRow, (idx < storeAdvice.singles.length - 1 || storeAdvice.split) && styles.itemBorder]}>
+                    <View
+                      key={s.chain_id}
+                      style={[
+                        styles.adviceRow,
+                        (idx < storeAdvice.singles.length - 1 || storeAdvice.split) && styles.itemBorder,
+                        !s.complete && styles.adviceRowGrey, // niet alles verkrijgbaar → grijs, geen (half) totaal
+                      ]}
+                    >
                       {chainDot(s.chain_id, 22)}
                       <View style={{ flex: 1, minWidth: 0 }}>
                         <Text style={styles.adviceName}>
                           Alles bij {chainName(s.chain_id)}
-                          {s.chain_id === storeAdvice.best.chain_id ? <Text style={styles.adviceBest}>  · voordeligste</Text> : null}
+                          {storeAdvice.best && s.chain_id === storeAdvice.best.chain_id ? (
+                            <Text style={styles.adviceBest}>  · voordeligste</Text>
+                          ) : null}
                         </Text>
-                        {s.unmatched.length > 0 ? (
-                          <Text style={styles.subline}>{s.unmatched.length} item{s.unmatched.length === 1 ? '' : 's'} niet gevonden</Text>
+                        {!s.complete ? (
+                          <Text style={styles.subline}>
+                            niet alles verkrijgbaar — mist {s.missing} item{s.missing === 1 ? '' : 's'}
+                          </Text>
                         ) : null}
                       </View>
-                      <Text style={styles.advicePrice}>± {formatEuroCents(s.total_cents)}</Text>
+                      <Text style={styles.advicePrice}>{s.complete ? `± ${formatEuroCents(s.total_cents)}` : '—'}</Text>
                     </View>
                   ))}
                   {storeAdvice.split ? (
@@ -642,12 +679,15 @@ export default function BoodschappenScreen() {
                           ) : null}
                         </Text>
                         <Text style={styles.subline} numberOfLines={1}>
-                          {storeAdvice.savings > 0
-                            ? [...storeAdvice.split.counts.entries()].map(([c, n]) => `${chainName(c)} ${n}`).join(' · ')
+                          {storeAdvice.savings > 0 || !storeAdvice.best
+                            ? [
+                                [...storeAdvice.split.counts.entries()].map(([c, n]) => `${chainName(c)} ${n}`).join(' · '),
+                                storeAdvice.split.missing > 0 ? `mist ${storeAdvice.split.missing}` : null,
+                              ].filter(Boolean).join(' · ')
                             : 'één winkel is hier al het voordeligst'}
                         </Text>
                       </View>
-                      {storeAdvice.savings > 0 ? (
+                      {storeAdvice.savings > 0 || !storeAdvice.best ? (
                         <Text style={[styles.advicePrice, { color: colors.primary }]}>± {formatEuroCents(storeAdvice.split.total)}</Text>
                       ) : null}
                     </View>
@@ -827,6 +867,7 @@ const styles = StyleSheet.create({
   },
   choosePillText: { fontSize: 11.5, fontFamily: fonts.bodyBold, color: colors.primary },
   adviceRow: { flexDirection: 'row', alignItems: 'center', gap: 11, paddingHorizontal: 14, paddingVertical: 11 },
+  adviceRowGrey: { opacity: 0.45 },
   adviceName: { fontSize: 13.5, color: colors.text, fontFamily: fonts.bodySemiBold },
   adviceBest: { fontSize: 10.5, color: colors.primary, fontFamily: fonts.bodyBold },
   adviceSave: { fontSize: 10.5, color: colors.primary, fontFamily: fonts.bodyBold },
