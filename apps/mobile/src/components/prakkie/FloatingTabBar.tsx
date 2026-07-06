@@ -1,24 +1,24 @@
 import { Tabs, useRouter } from 'expo-router';
 import type { ComponentProps } from 'react';
-import { BookOpen, Calendar, ListChecks, Plus, Tag } from 'lucide-react-native';
+import { BookOpen, Calendar, Plus, ShoppingCart, UserRound } from 'lucide-react-native';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, icons, radius, shadows, type } from '../../theme/tokens';
 
 /**
- * The floating pill tab bar + centre FAB — docs/04 §2.
- * Recepten · Plannen · [+] · Lijst · Prijzen. The FAB opens the import sheet.
+ * The floating pill tab bar + centre FAB — docs/04 §2, owner rework 2026-07-06:
+ * Recepten · Plannen · [+] · Boodschappen · Profiel. The FAB opens the import sheet.
  */
 
 const TAB_META: Record<string, { label: string; Icon: typeof BookOpen }> = {
   index: { label: 'Recepten', Icon: BookOpen },
   plannen: { label: 'Plannen', Icon: Calendar },
-  lijst: { label: 'Lijst', Icon: ListChecks },
-  prijzen: { label: 'Prijzen', Icon: Tag },
+  boodschappen: { label: 'Boodschap.', Icon: ShoppingCart },
+  profiel: { label: 'Profiel', Icon: UserRound },
 };
 
 const LEFT_TABS = ['index', 'plannen'];
-const RIGHT_TABS = ['lijst', 'prijzen'];
+const RIGHT_TABS = ['boodschappen', 'profiel'];
 
 /** Derive the tabBar render-prop type from expo-router itself — its vendored
  *  react-navigation types are not interchangeable with the standalone package. */

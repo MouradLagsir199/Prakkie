@@ -66,11 +66,11 @@ app.http('list-generate', {
       for (const line of lines) {
         await tx.query(
           `INSERT INTO app.list_items (id, list_id, name, quantity, unit, item_normalised, aisle_group_id,
-             sort_order, is_manual, provenance)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, $9)`,
+             sort_order, is_manual, provenance, added_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, $9, $10)`,
           [
             randomUUID(), listId, line.name, line.quantity, line.unit, line.item_normalised,
-            line.aisle_group_id, sort++, JSON.stringify(line.provenance),
+            line.aisle_group_id, sort++, JSON.stringify(line.provenance), claims.userId,
           ]
         );
       }

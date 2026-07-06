@@ -121,7 +121,7 @@ export default function ReceptenScreen() {
         title={searching ? 'Zoeken' : 'Mijn recepten'}
         greetingName={searching ? '' : userName}
         avatarInitial={(userName || 'P').slice(0, 1).toUpperCase()}
-        onAvatarPress={() => router.push('/instellingen')}
+        onAvatarPress={() => router.push('/profiel')}
       />
       <View style={styles.segmentRow}>
         <View style={styles.segment}>

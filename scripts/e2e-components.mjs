@@ -192,14 +192,72 @@ check('2× genereren op zelfde lijst: geen duplicaten', gen1.status === 200 && g
   `run1 ${gen1.body.added} regels, run2 ${gen2.body.added}, live nu ${liveItems.length}`);
 check('handmatig item overleeft regenerate (G4)', manualSurvived, manualSurvived ? 'wc-papier staat er nog' : 'wc-papier verdween!');
 
-// ---------------------------------------------------------------- 5. HOUSEHOLDS (settings contract)
-console.log('\n— huishouden: list/create voor het instellingen-scherm —');
+// ---------------------------------------------------------------- 5. HOUSEHOLDS (profiel contract)
+console.log('\n— huishouden: list/create + e-mail-invite + gedeelde lijst + added-by log —');
 const hh = await jfetch('/v1/households', { method: 'POST', body: JSON.stringify({ name: 'component huis' }) }, token);
 const hhList = await jfetch('/v1/households', {}, token);
 check('GET /v1/households toont lidmaatschap + ledental',
   hh.status === 201 && hhList.status === 200 &&
     (hhList.body.households ?? []).some((h) => h.id === hh.body.id && h.member_count === 1 && h.role === 'owner'),
   JSON.stringify(hhList.body.households?.[0] ?? {}).slice(0, 90));
+
+// e-mail-invite flow (owner UX 2026-07-06): A nodigt B uit op e-mail; B ziet
+// de invite na registratie met dat adres, accepteert, en deelt de lijst.
+const stamp = Date.now().toString(36);
+const emailB = `e2e-${stamp}@prakkie-test.nl`;
+const inv = await jfetch(`/v1/households/${hh.body.id}/invite`, { method: 'POST', body: JSON.stringify({ email: emailB }) }, token);
+check('invite op e-mail geaccepteerd door API', inv.status === 200 && inv.body.invited === emailB);
+
+const regB = await jfetch('/v1/auth/register', {
+  method: 'POST',
+  body: JSON.stringify({ email: emailB, password: `Pw-${stamp}-123456`, display_name: 'Sanne', platform: 'android' }),
+});
+check('user B registreert met dat e-mailadres', regB.status === 201 || regB.status === 200, `status ${regB.status}`);
+const tokenB = regB.body.access_token;
+
+const mineB = await jfetch('/v1/households/invites', {}, tokenB);
+const pending = (mineB.body.invites ?? []).find((i) => i.household_id === hh.body.id);
+check('B ziet de openstaande uitnodiging', mineB.status === 200 && !!pending, JSON.stringify(mineB.body.invites?.[0] ?? {}).slice(0, 80));
+
+const accept = pending ? await jfetch(`/v1/households/invites/${pending.id}/accept`, { method: 'POST', body: '{}' }, tokenB) : { status: 0, body: {} };
+check('B accepteert → lid van huishouden', accept.status === 200 && accept.body.id === hh.body.id);
+
+// gedeelde lijst: A maakt een lijst met household_id; B ziet hem en vult aan
+const sharedList = crypto.randomUUID();
+await push(token, [{
+  entity: 'lists', op: 'upsert', id: sharedList, base_updated_at: null,
+  fields: { name: 'gedeelde boodschappen', week_start: monday, household_id: hh.body.id },
+}]);
+const bSees = await jfetch('/v1/sync?entities=lists', {}, tokenB);
+check('B ziet de gedeelde lijst via sync', (bSees.body.changes?.lists?.rows ?? []).some((r) => r.id === sharedList));
+
+const bItem = crypto.randomUUID();
+const bAdd = await push(tokenB, [{
+  entity: 'list_items', op: 'upsert', id: bItem, base_updated_at: null,
+  fields: { list_id: sharedList, name: 'roomboter', is_manual: true },
+}]);
+check('B voegt item toe aan de gedeelde lijst', bAdd.status === 200 && bAdd.body.results?.[0]?.status === 'applied',
+  bAdd.body.results?.[0]?.message ?? '');
+
+// added_by-log: A ziet WIE het item toevoegde (server-gestempeld, niet client)
+const aSees = await jfetch('/v1/sync?entities=list_items', {}, token);
+const bRow = (aSees.body.changes?.list_items?.rows ?? []).find((r) => r.id === bItem);
+check('added_by = user B (log "wie heeft wat toegevoegd")', !!bRow && bRow.added_by === regB.body.user?.id,
+  `added_by=${String(bRow?.added_by).slice(0, 8)}… verwacht ${String(regB.body.user?.id).slice(0, 8)}…`);
+
+// ---------------------------------------------------------------- 6. PRODUCTKEUZE (dropdown-contract)
+console.log('\n— productkeuze: shortlist altijd + breed (user bepaalt) —');
+const rb = await jfetch(`/v1/match?item=roomboter&chains=ah`, {}, token);
+const rbList = rb.body.matches?.ah?.shortlist ?? [];
+check('shortlist komt ALTIJD terug en is breed (≥8 opties)', rb.status === 200 && rbList.length >= 8, `${rbList.length} opties`);
+check('opties hebben naam + prijs + image-veld', rbList.slice(0, 8).every((o) => o.name && o.price_cents > 0 && 'image_url' in o));
+const croissant = rbList.find((o) => /croissant/i.test(o.name));
+console.log(`  croissant direct in top-12 bij "roomboter": ${croissant ? `JA — "${croissant.name}"` : 'nee (via zoekveld)'}`);
+// het zoekveld in de dropdown (owner-bug): verfijnen levert de croissants op
+const rbc = await jfetch(`/v1/match?item=${encodeURIComponent('roomboter croissant')}&chains=ah`, {}, token);
+const rbcTop = rbc.body.matches?.ah?.shortlist?.[0];
+check('dropdown-zoek "roomboter croissant" → croissants bovenaan',
+  rbc.status === 200 && !!rbcTop && /croissant/i.test(rbcTop.name), rbcTop?.name ?? 'geen');
 
 console.log(`\n${failures === 0 ? 'All component e2e checks passed.' : `${failures} FAILURES`}`);
 process.exit(failures === 0 ? 0 : 1);

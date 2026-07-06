@@ -66,9 +66,72 @@ app.http('household-invite', {
       [req.params.id, claims.userId]
     );
     if (!member.rowCount) throw new HttpError(403, 'forbidden', 'Geen lid van dit huishouden');
+
+    // e-mail invite (owner UX 2026-07-06): stored server-side; the invitee sees
+    // it under /v1/households/invites once signed in with that address
+    const body = await parseBody(req, z.object({ email: z.string().email().optional() }).default({}));
+    if (body.email) {
+      const email = body.email.toLowerCase();
+      const self = await query<{ email: string | null }>(`SELECT email FROM app.users WHERE id = $1`, [claims.userId]);
+      if (self.rows[0]?.email?.toLowerCase() === email) {
+        throw new HttpError(400, 'self_invite', 'Je zit al in dit huishouden');
+      }
+      await query(
+        `INSERT INTO app.household_invites (household_id, email, invited_by) VALUES ($1, $2, $3)
+         ON CONFLICT (household_id, lower(email)) WHERE accepted_at IS NULL DO NOTHING`,
+        [req.params.id, email, claims.userId]
+      );
+      return json(200, { invited: email });
+    }
+
     // 7-day invite; deep link opens the app which POSTs /join
     const token = sign(JSON.stringify({ h: req.params.id, exp: Date.now() + 7 * 864e5 }));
     return json(200, { invite_token: token, deep_link: `prakkie://huishouden/join?token=${token}` });
+  }),
+});
+
+app.http('household-invites-mine', {
+  methods: ['GET'],
+  authLevel: 'anonymous',
+  route: 'v1/households/invites',
+  handler: handler(async (req) => {
+    const claims = await requireAuth(req);
+    // pending invites for the e-mail on my account (guests without e-mail see none)
+    const r = await query(
+      `SELECT i.id, i.household_id, h.name AS household_name, u.display_name AS invited_by_name, i.created_at
+       FROM app.household_invites i
+       JOIN app.households h ON h.id = i.household_id
+       JOIN app.users u ON u.id = i.invited_by
+       WHERE i.accepted_at IS NULL
+         AND lower(i.email) = (SELECT lower(email) FROM app.users WHERE id = $1 AND email IS NOT NULL)`,
+      [claims.userId]
+    );
+    return json(200, { invites: r.rows });
+  }),
+});
+
+app.http('household-invite-accept', {
+  methods: ['POST'],
+  authLevel: 'anonymous',
+  route: 'v1/households/invites/{inviteId}/accept',
+  handler: handler(async (req) => {
+    const claims = await requireAuth(req);
+    const invite = await query<{ id: string; household_id: string }>(
+      `SELECT i.id, i.household_id FROM app.household_invites i
+       WHERE i.id = $2 AND i.accepted_at IS NULL
+         AND lower(i.email) = (SELECT lower(email) FROM app.users WHERE id = $1 AND email IS NOT NULL)`,
+      [claims.userId, req.params.inviteId]
+    );
+    if (!invite.rowCount) throw new HttpError(404, 'not_found', 'Uitnodiging niet gevonden (of al gebruikt)');
+    await withTransaction(async (tx) => {
+      await tx.query(
+        `INSERT INTO app.household_members (household_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        [invite.rows[0]!.household_id, claims.userId]
+      );
+      await tx.query(`UPDATE app.household_invites SET accepted_at = now() WHERE id = $1`, [req.params.inviteId]);
+    });
+    const info = await query(`SELECT id, name FROM app.households WHERE id = $1`, [invite.rows[0]!.household_id]);
+    return json(200, info.rows[0]);
   }),
 });
 

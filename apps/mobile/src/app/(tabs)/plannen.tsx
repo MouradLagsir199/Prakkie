@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { deleteRow, newId, syncNow, upsertRow, useEntityRows } from '../../data';
 import { authedRequest } from '../../data/api';
 import { addDays, isoWeekNumber, mondayOf, weekRangeLabel } from '../../data/chains';
+import { activeHouseholdId } from '../../data/households';
 import { recipeImage, type RecipeRowData } from '../../data/recipes';
 import { colors, fonts, radius, type } from '../../theme/tokens';
 
@@ -40,7 +41,13 @@ export default function PlannenScreen() {
     .map((r) => ({ ...(r.row as unknown as PlanRow), id: r.id }))
     .find((p) => String(p.week_start).slice(0, 10) === weekStart);
   const entries = useMemo(
-    () => entryRows.map((r) => r.row as unknown as EntryRow).filter((e) => plan && e.plan_id === plan.id),
+    () =>
+      entryRows
+        .map((r) => r.row as unknown as EntryRow)
+        .filter((e) => plan && e.plan_id === plan.id)
+        // server round-trips dates as ISO datetimes — normalise or entries
+        // vanish from their day after the first sync (owner bug 2026-07-06)
+        .map((e) => ({ ...e, entry_date: e.entry_date ? String(e.entry_date).slice(0, 10) : null })),
     [entryRows, plan]
   );
   const recipeById = useMemo(() => {
@@ -122,7 +129,11 @@ export default function PlannenScreen() {
       let listId = existing?.id;
       if (!listId) {
         listId = newId();
-        await upsertRow('lists', { name: 'Weekboodschappen', week_start: weekStart }, listId);
+        await upsertRow(
+          'lists',
+          { name: 'Weekboodschappen', week_start: weekStart, household_id: await activeHouseholdId() },
+          listId
+        );
         await syncNow(['lists']);
       }
       const res = await authedRequest(`/v1/lists/${listId}/generate`, {
@@ -134,7 +145,7 @@ export default function PlannenScreen() {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       await syncNow(['lists', 'list_items']);
-      router.push('/lijst');
+      router.push('/boodschappen');
     } catch {
       Alert.alert('Lijst maken mislukt', 'Controleer je verbinding en probeer opnieuw.');
     } finally {

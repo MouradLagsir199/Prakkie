@@ -25,6 +25,8 @@ export interface EntityDef {
   insertRequired: string[];
   /** false ⇒ no deleted_at column; sync deletes are hard deletes */
   hasTombstone?: boolean;
+  /** column stamped with the requesting user id on INSERT (attribution, e.g. list_items.added_by) */
+  stampUserColumn?: string;
 }
 
 export const SYNC_ENTITIES = {
@@ -74,6 +76,7 @@ export const SYNC_ENTITIES = {
     jsonb: ['provenance', 'matches'],
     fieldGroups: [['checked'], ['name', 'quantity', 'unit'], ['aisle_group_id', 'sort_order'], ['matches']],
     insertRequired: ['list_id', 'name'],
+    stampUserColumn: 'added_by', // "wie heeft wat toegevoegd" (Boodschappen-log)
   },
   plans: {
     table: 'app.plans',

@@ -167,8 +167,15 @@ async function applyMutation(
         );
         if (!parent.rowCount) return { ...base, status: 'forbidden' as const };
       }
-      const allColumns = ['id', ...scopeColumns, ...columns];
-      const values = [mutation.id, ...scopeColumns.map(() => userId), ...columns.map((c) => bindValue(def, c, apply[c]))];
+      // attribution: who added this row (e.g. list_items.added_by → household log)
+      const stampColumns = def.stampUserColumn ? [def.stampUserColumn] : [];
+      const allColumns = ['id', ...scopeColumns, ...stampColumns, ...columns];
+      const values = [
+        mutation.id,
+        ...scopeColumns.map(() => userId),
+        ...stampColumns.map(() => userId),
+        ...columns.map((c) => bindValue(def, c, apply[c])),
+      ];
       const placeholders = allColumns.map((_, i) => `$${i + 1}`).join(', ');
       await tx.query(`INSERT INTO ${def.table} (${allColumns.join(', ')}) VALUES (${placeholders})`, values);
     }

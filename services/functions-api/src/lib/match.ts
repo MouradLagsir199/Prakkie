@@ -35,7 +35,10 @@ export interface ChainMatch {
 }
 
 export const SHORTLIST_THRESHOLD = 0.72;
-const SHORTLIST_SIZE = 5;
+// owner UX 2026-07-06: the user always picks the product — every item gets a
+// full dropdown, so the shortlist is broad (roombotercroissant must show up
+// under "roomboter") and always returned, not only when the matcher doubts.
+const SHORTLIST_SIZE = 12;
 
 type Queryable = Pick<PoolClient, 'query'>;
 
@@ -166,7 +169,7 @@ export async function matchItem(
     const best = candidates[0] ?? null;
     result[chainId] = {
       best,
-      shortlist: best && best.confidence < SHORTLIST_THRESHOLD ? candidates.slice(0, SHORTLIST_SIZE) : [],
+      shortlist: candidates.slice(0, SHORTLIST_SIZE),
     };
   }
   return result;

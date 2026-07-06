@@ -179,6 +179,16 @@
 - [x] Mockups 03/04/05/06 bijgewerkt op de audit-beslissingen (quick-add, AI-suggestie-conventie, + toevoegen, eerlijke meta)
 - [x] `scripts/e2e-components.mjs`: per-feature live suite — import ×3 echte sites + non-recipe fail, 20 NL-staples matching, lijst-lifecycle, notitie-maaltijd, regenerate-idempotentie, households
 
+## Owner-directives ronde 2 (2026-07-06 avond) — user bepaalt, huishouden op e-mail
+
+- [x] **Productkeuze bij de user**: elke lijstregel heeft een dropdown met álle matchende producten (thumbnails + prijs, `ProductOptions`); shortlist komt altijd terug en is breed (12 — "roombotercroissant" verschijnt bij "roomboter"); zonder keuze géén productnaam/prijs op de regel ("Kies"-pill); hoofdtotaal telt alleen eigen keuzes, keten-chips blijven de ±-schatting
+- [x] **Recept → lijst**: na dag-keuze volgt een productkeuze-stap per ingrediënt (accordion met opties bij jouw winkel); keuzes worden gepind + gevoed aan E5-corrections
+- [x] **Prijzen-tab vervangen door Profiel** (Bordje-Profiel.png 1:1): profielkaart met leden-chips + invite, supers/taal/eenheden/porties/meldingen-rijen, premium-teaser (betalen bewust uit), GDPR-voet; account-rij (e-mail registreren/inloggen, gast-upgrade behoudt data)
+- [x] **Huishouden op e-mail-invite**: migration 0013 (`household_invites`), invite {email} endpoint, `GET /v1/households/invites` + accept; gedeelde lijsten krijgen `household_id` bij aanmaken
+- [x] **Lijst → Boodschappen**: maand-kalender met puntjes op dagen met boodschappen, dag openen/sluiten, lijsten per dátum (week_start draagt de dag); log "laatst: wie — wat" + added-by-initialen per regel (`list_items.added_by`, server-gestempeld)
+- [x] **Bugfix weekplanner**: entry_date kwam na sync als ISO-datetime terug → recept verdween uit de dag (slice-normalisatie)
+- [x] e2e-components uitgebreid: e-mail-invite flow (A nodigt uit → B registreert → ziet → accepteert → deelt lijst → added_by-log), shortlist-breedte-contract
+
 ## Inputs from owner (see [`10_inputs-needed.md`](10_inputs-needed.md))
 
 - [x] 1 · Azure subscription + RG naming

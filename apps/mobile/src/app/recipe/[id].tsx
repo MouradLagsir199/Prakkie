@@ -7,8 +7,11 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ProductOptions, type ProductOption } from '../../components/prakkie/ProductOptions';
 import { deleteRow, getData, newId, syncNow, upsertRow } from '../../data';
 import { addDays, isoWeekNumber, mondayOf, weekRangeLabel } from '../../data/chains';
+import { activeHouseholdId } from '../../data/households';
+import { kv } from '../../data/kv';
 import { recipeImage, type RecipeRowData } from '../../data/recipes';
 import { colors, fonts, radius, type } from '../../theme/tokens';
 
@@ -26,10 +29,21 @@ export default function RecipeDetail() {
   const router = useRouter();
   const [recipe, setRecipe] = useState<RecipeRowData | null>(null);
   const [servings, setServings] = useState(2);
-  const [sheet, setSheet] = useState<'none' | 'list' | 'plan'>('none');
+  const [sheet, setSheet] = useState<'none' | 'list' | 'products' | 'plan'>('none');
   const [weekOffset, setWeekOffset] = useState(0);
   const [weekLists, setWeekLists] = useState<ListRow[]>([]);
   const [planDay, setPlanDay] = useState(0);
+  // productkeuze-stap (owner UX): user kiest per ingrediënt een product
+  const [listDay, setListDay] = useState(0);
+  const [targetList, setTargetList] = useState<string | 'new'>('new');
+  const [homeChain, setHomeChain] = useState('ah');
+  const [picks, setPicks] = useState<Record<number, ProductOption>>({});
+  const [expandedIng, setExpandedIng] = useState<number | null>(0);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    kv.getItem('prakkie.homechain').then((c) => c && setHomeChain(c)).catch(() => {});
+  }, []);
 
   useEffect(() => {
     getData().then(async ({ store }) => {
@@ -43,16 +57,17 @@ export default function RecipeDetail() {
   }, [id]);
 
   const weekStart = mondayOf(weekOffset);
+  const listDate = addDays(weekStart, listDay);
   useEffect(() => {
     if (sheet !== 'list') return;
     getData().then(async ({ store }) => {
       const lists = (await store.listRows('lists'))
         .filter((l) => !l.deleted)
         .map((l) => ({ ...(l.row as unknown as ListRow), id: l.id }))
-        .filter((l) => (l.week_start ?? '').slice(0, 10) === weekStart);
+        .filter((l) => (l.week_start ?? '').slice(0, 10) === listDate);
       setWeekLists(lists);
     });
-  }, [sheet, weekStart]);
+  }, [sheet, listDate]);
 
   const factor = recipe ? servings / (recipe.servings_base ?? 2) : 1;
   const scaled = useMemo(
@@ -75,26 +90,59 @@ export default function RecipeDetail() {
     );
   }
 
-  async function addToList(listId: string | 'new') {
-    let target = listId;
-    if (target === 'new') {
-      target = newId();
-      await upsertRow('lists', { name: `Week ${isoWeekNumber(weekStart)}`, week_start: weekStart }, target);
+  /** stap 1 → 2: doel gekozen, nu per ingrediënt een product kiezen (owner UX). */
+  function toProducts(listId: string | 'new') {
+    setTargetList(listId);
+    setPicks({});
+    setExpandedIng(0);
+    setSheet('products');
+  }
+
+  /** schrijft de items — gekozen producten worden gepind (user_pinned) + E5-correctie. */
+  async function confirmAdd() {
+    if (!recipe) return;
+    setSaving(true);
+    try {
+      let target = targetList;
+      if (target === 'new') {
+        target = newId();
+        await upsertRow(
+          'lists',
+          { name: `Boodschappen ${Number(listDate.slice(8))}/${Number(listDate.slice(5, 7))}`, week_start: listDate, household_id: await activeHouseholdId() },
+          target
+        );
+      }
+      for (let i = 0; i < scaled.length; i++) {
+        const ing = scaled[i]!;
+        const pick = picks[i];
+        await upsertRow('list_items', {
+          list_id: target,
+          name: ing.item_normalised ?? ing.raw_text ?? 'item',
+          quantity: ing.quantity != null ? ing.quantity * factor : null,
+          unit: ing.unit ?? null,
+          item_normalised: ing.item_normalised ?? null,
+          is_manual: false,
+          provenance: [{ recipe_id: recipe.id, recipe_title: recipe.title, quantity: null, unit: null }],
+          ...(pick ? { matches: { [homeChain]: { sku_id: pick.sku_id, confidence: 1, user_pinned: true } } } : {}),
+        });
+        if (pick) {
+          await upsertRow('match_corrections', {
+            chain_id: homeChain,
+            item_normalised: (ing.item_normalised ?? ing.raw_text ?? '').toLowerCase(),
+            chosen_sku_id: pick.sku_id,
+          });
+        }
+      }
+      setSheet('none');
+      syncNow(['lists', 'list_items', 'match_corrections']).catch(() => {});
+      const chosen = Object.keys(picks).length;
+      Alert.alert(
+        'Op de lijst',
+        `${scaled.length} ingrediënten voor ${Number(listDate.slice(8))}/${Number(listDate.slice(5, 7))} — ${chosen} product${chosen === 1 ? '' : 'en'} door jou gekozen.`
+      );
+    } finally {
+      setSaving(false);
     }
-    for (const ing of scaled) {
-      await upsertRow('list_items', {
-        list_id: target,
-        name: ing.item_normalised ?? ing.raw_text ?? 'item',
-        quantity: ing.quantity != null ? ing.quantity * factor : null,
-        unit: ing.unit ?? null,
-        item_normalised: ing.item_normalised ?? null,
-        is_manual: false,
-        provenance: [{ recipe_id: recipe!.id, recipe_title: recipe!.title, quantity: null, unit: null }],
-      });
-    }
-    setSheet('none');
-    syncNow(['lists', 'list_items']).catch(() => {});
-    Alert.alert('Toegevoegd', `${scaled.length} ingrediënten op je lijst voor week ${isoWeekNumber(weekStart)}.`);
   }
 
   async function planIt() {
@@ -237,22 +285,80 @@ export default function RecipeDetail() {
       {sheet !== 'none' ? (
         <View style={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
           <View style={styles.sheetHeader}>
-            <Text style={type.h3}>{sheet === 'list' ? 'Op welke lijst?' : 'Wanneer eten?'}</Text>
+            <Text style={type.h3}>
+              {sheet === 'list' ? 'Wanneer boodschappen doen?' : sheet === 'products' ? 'Kies jouw producten' : 'Wanneer eten?'}
+            </Text>
             <Pressable onPress={() => setSheet('none')} hitSlop={10}>
               <X size={20} color={colors.textSoft} />
             </Pressable>
           </View>
-          {weekPicker}
+          {sheet !== 'products' ? weekPicker : null}
           {sheet === 'list' ? (
             <>
+              <View style={styles.dayRow}>
+                {DAY_ABBREV_NL.map((d, i) => (
+                  <Pressable key={d} onPress={() => setListDay(i)} style={[styles.dayChip, listDay === i && styles.dayChipActive]}>
+                    <Text style={[styles.dayChipText, listDay === i && { color: colors.onPrimary }]}>{d}</Text>
+                    <Text style={[styles.dayChipNum, listDay === i && { color: colors.onPrimary }]}>
+                      {Number(addDays(weekStart, i).slice(8))}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
               {weekLists.map((l) => (
-                <Pressable key={l.id} style={styles.sheetRow} onPress={() => addToList(l.id)}>
+                <Pressable key={l.id} style={styles.sheetRow} onPress={() => toProducts(l.id)}>
                   <Text style={type.body}>{l.name}</Text>
-                  <Text style={type.meta}>week {isoWeekNumber(weekStart)}</Text>
+                  <Text style={type.meta}>{Number(listDate.slice(8))}/{Number(listDate.slice(5, 7))}</Text>
                 </Pressable>
               ))}
-              <Pressable style={[styles.sheetRow, styles.sheetNew]} onPress={() => addToList('new')}>
-                <Text style={[type.body, { color: colors.primary }]}>+ Nieuwe lijst voor week {isoWeekNumber(weekStart)}</Text>
+              <Pressable style={[styles.sheetRow, styles.sheetNew]} onPress={() => toProducts('new')}>
+                <Text style={[type.body, { color: colors.primary }]}>
+                  + Nieuwe lijst voor {DAY_ABBREV_NL[listDay]} {Number(listDate.slice(8))}/{Number(listDate.slice(5, 7))}
+                </Text>
+              </Pressable>
+            </>
+          ) : sheet === 'products' ? (
+            <>
+              <Text style={type.meta}>
+                Per ingrediënt: tik en kies welk product het wordt bij {homeChain.toUpperCase()}. De app kiest nooit voor je.
+              </Text>
+              <ScrollView style={{ maxHeight: 380 }} showsVerticalScrollIndicator={false}>
+                {scaled.map((ing, i) => {
+                  const term = ing.item_normalised ?? ing.raw_text ?? '';
+                  const pick = picks[i];
+                  const open = expandedIng === i;
+                  return (
+                    <View key={i} style={styles.pickBlock}>
+                      <Pressable style={styles.pickHead} onPress={() => setExpandedIng(open ? null : i)}>
+                        <Text style={[type.body, { flex: 1, fontSize: 13.5 }]} numberOfLines={1}>{term}</Text>
+                        {pick ? (
+                          <Text style={styles.pickChosen} numberOfLines={1}>{pick.name}</Text>
+                        ) : (
+                          <Text style={styles.pickNone}>kies →</Text>
+                        )}
+                      </Pressable>
+                      {open ? (
+                        <ProductOptions
+                          term={term}
+                          chain={homeChain}
+                          currentSku={pick?.sku_id ?? null}
+                          maxRows={6}
+                          onPick={(o) => {
+                            setPicks({ ...picks, [i]: o });
+                            setExpandedIng(i + 1 < scaled.length ? i + 1 : null); // door naar de volgende
+                          }}
+                        />
+                      ) : null}
+                    </View>
+                  );
+                })}
+              </ScrollView>
+              <Pressable style={styles.confirmBtn} onPress={confirmAdd} disabled={saving}>
+                <Text style={[type.h3, { color: colors.onPrimary }]}>
+                  {saving
+                    ? 'Bezig…'
+                    : `Zet ${scaled.length} op de lijst · ${Object.keys(picks).length} gekozen`}
+                </Text>
               </Pressable>
             </>
           ) : (
@@ -339,4 +445,8 @@ const styles = StyleSheet.create({
   confirmBtn: {
     backgroundColor: colors.primary, borderRadius: radius.lg, padding: 15, alignItems: 'center', marginTop: 4,
   },
+  pickBlock: { borderBottomWidth: 1, borderBottomColor: 'rgba(34,48,30,.06)', paddingVertical: 4 },
+  pickHead: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
+  pickChosen: { maxWidth: 170, fontSize: 12, color: colors.primary, fontFamily: fonts.bodySemiBold },
+  pickNone: { fontSize: 12.5, color: '#97A08F', fontFamily: fonts.bodySemiBold },
 });

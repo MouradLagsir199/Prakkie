@@ -41,6 +41,7 @@ export default function Onboarding() {
       /* offline: defaults blijven; instellingen sync later */
     }
     await kv.setItem('prakkie.onboarded', '1');
+    await kv.setItem('prakkie.homechain', selected[0] ?? 'ah').catch(() => {});
     setBusy(false);
     router.replace('/import');
   }
