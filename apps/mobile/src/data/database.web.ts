@@ -5,7 +5,7 @@ import type { CachedRow, LocalStore, PendingMutation, SyncEntityName, SyncMutati
  * localStorage-backed implementation of the same LocalStore contract the
  * expo-sqlite adapter fulfils natively. (sqlite-wasm would demand COOP/COEP
  * cross-origin isolation, which breaks loading recipe images from chain CDNs —
- * localStorage keeps offline persistence without那 trade-off.)
+ * localStorage keeps offline persistence without that trade-off.)
  */
 
 const P = 'prakkie:'; // key namespace
