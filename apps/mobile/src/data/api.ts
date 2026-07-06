@@ -1,6 +1,7 @@
 import type { PullEntityChanges, PushResult, SyncEntityName, SyncMutation, SyncTransport } from '@prakkie/shared';
-import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
+// platform-forked: SecureStore native, localStorage web (SecureStore crasht op web)
+import * as SecureStore from './secure-tokens';
 
 /**
  * API client for func-prakkie-api (ADR-0004 sessions): 15-min access JWT +
@@ -117,6 +118,9 @@ async function refreshSession(): Promise<boolean> {
 
 /** Bearer request with one silent refresh-and-retry on 401. */
 export async function authedRequest(path: string, init: RequestInit = {}): Promise<Response> {
+  // web skips onboarding (the usual ensureSession caller) — bootstrap the
+  // guest session here so the first request isn't a dead "Bearer null" 401
+  if (!(await SecureStore.getItemAsync(KEYS.access))) await ensureSession();
   const attempt = async () =>
     request(path, {
       ...init,
