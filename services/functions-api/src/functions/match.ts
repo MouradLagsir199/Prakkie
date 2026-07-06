@@ -1,7 +1,7 @@
 import { app } from '@azure/functions';
 import { normaliseIngredient } from '@prakkie/matching';
 import { HttpError, handler, json, requireAuth } from '../lib/http';
-import { matchItem } from '../lib/match';
+import { matchItem, resolveLexicon } from '../lib/match';
 import { query } from '../lib/db';
 
 /**
@@ -25,8 +25,12 @@ app.http('match-item', {
     const target = (chains.length ? chains : [...enabledIds]).filter((c) => enabledIds.has(c));
     if (!target.length) throw new HttpError(400, 'no_chains', 'No enabled chains requested');
 
-    const item = normaliseIngredient(rawItem).item;
-    const matches = await matchItem(item, target, claims.userId);
-    return json(200, { item, matches });
+    // lexicon-resolved term + default aisle, so quick-added items normalise and
+    // group exactly like generated lines do (UX-audit L1). matchItem still gets
+    // the raw normalised item — user corrections are keyed on it.
+    const norm = normaliseIngredient(rawItem);
+    const { term, aisleGroupId } = await resolveLexicon(norm.item);
+    const matches = await matchItem(norm.item, target, claims.userId);
+    return json(200, { item: term, aisle_group_id: aisleGroupId, quantity: norm.quantity, unit: norm.unit, matches });
   }),
 });

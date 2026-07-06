@@ -86,10 +86,11 @@ export const SYNC_ENTITIES = {
   plan_entries: {
     table: 'app.plan_entries',
     scope: 'planChild',
-    writable: ['plan_id', 'recipe_id', 'entry_date', 'meal_slot', 'servings', 'sort_order'],
+    // title = note meal without recipe_id (UX-audit P3); DB CHECK enforces one of the two
+    writable: ['plan_id', 'recipe_id', 'title', 'entry_date', 'meal_slot', 'servings', 'sort_order'],
     jsonb: [],
     fieldGroups: [],
-    insertRequired: ['plan_id', 'recipe_id', 'servings'],
+    insertRequired: ['plan_id', 'servings'],
   },
   plan_templates: {
     table: 'app.plan_templates',

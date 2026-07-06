@@ -1,4 +1,4 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, type } from '../../theme/tokens';
 
 function greetingNow(): string {
@@ -18,11 +18,14 @@ export function ScreenHeader({
   greetingName,
   avatarInitial,
   contextLine,
+  onAvatarPress,
 }: {
   title: string;
   greetingName?: string;
   avatarInitial?: string;
   contextLine?: string;
+  /** UX-audit C3: avatar is the entrance to /instellingen. */
+  onAvatarPress?: () => void;
 }) {
   return (
     <View style={styles.row}>
@@ -36,9 +39,15 @@ export function ScreenHeader({
         {contextLine ? <Text style={[type.meta, styles.context]}>{contextLine}</Text> : null}
       </View>
       {avatarInitial ? (
-        <View style={styles.avatar}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Instellingen"
+          onPress={onAvatarPress}
+          disabled={!onAvatarPress}
+          style={styles.avatar}
+        >
           <Text style={styles.avatarText}>{avatarInitial}</Text>
-        </View>
+        </Pressable>
       ) : null}
     </View>
   );

@@ -154,6 +154,15 @@ export default function RecipeDetail() {
     <View style={styles.screen}>
       <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}>
         <Image source={{ uri: recipeImage(recipe) }} style={styles.hero} contentFit="cover" />
+        {/* C1 — expliciete terugknop; zonder header is er anders geen weg terug op iOS */}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Terug"
+          onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))}
+          style={[styles.backBtn, { top: insets.top + 8 }]}
+        >
+          <ChevronLeft size={22} color={colors.text} strokeWidth={2.4} />
+        </Pressable>
         <View style={styles.body}>
           <Text style={type.h1}>{recipe.title}</Text>
           <View style={styles.metaRow}>
@@ -279,6 +288,12 @@ function formatQty(n: number): string {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   hero: { width: '100%', height: 240 },
+  backBtn: {
+    position: 'absolute', left: 14, width: 38, height: 38, borderRadius: 19,
+    backgroundColor: 'rgba(253,251,246,.92)', alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: 'rgba(34,48,30,.12)',
+    shadowColor: '#22301E', shadowOpacity: 0.15, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 4,
+  },
   body: { padding: 16, gap: 10 },
   metaRow: { flexDirection: 'row', gap: 14, alignItems: 'center' },
   metaItem: { flexDirection: 'row', gap: 4, alignItems: 'center' },

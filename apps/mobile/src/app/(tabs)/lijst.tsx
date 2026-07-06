@@ -1,9 +1,9 @@
 import { AISLE_GROUPS, formatEuroCents, OVERIG_GROUP_ID } from '@prakkie/shared';
-import { Check, ChevronLeft, ChevronRight, X } from 'lucide-react-native';
+import { Check, ChevronLeft, ChevronRight, Minus, Plus, Trash2, X } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { newId, syncNow, upsertRow, useEntityRows } from '../../data';
+import { deleteRow, newId, syncNow, upsertRow, useEntityRows } from '../../data';
 import { authedRequest } from '../../data/api';
 import { CHAIN_BRAND, chainChip, chainName, isoWeekNumber, mondayOf, weekRangeLabel } from '../../data/chains';
 import { colors, fonts, radius, type } from '../../theme/tokens';
@@ -45,6 +45,7 @@ export default function LijstScreen() {
   const [pricing, setPricing] = useState<ChainPricing[] | null>(null);
   const [variantItem, setVariantItem] = useState<ItemRow | null>(null);
   const [shortlist, setShortlist] = useState<Shortlist[] | null>(null);
+  const [quickAdd, setQuickAdd] = useState('');
 
   const weekStart = mondayOf(weekOffset);
   const weekLists = useMemo(
@@ -104,11 +105,66 @@ export default function LijstScreen() {
     syncNow(['list_items']).catch(() => {});
   }
 
-  async function newList() {
+  async function newList(): Promise<string> {
     const id = newId();
     await upsertRow('lists', { name: `Lijst ${weekLists.length + 1}`, week_start: weekStart }, id);
     setActiveListId(id);
     syncNow(['lists']).catch(() => {});
+    return id;
+  }
+
+  /** L1 — manual add: offline-first insert, online enrichment (normalise + aisle). */
+  async function addManual() {
+    const typed = quickAdd.trim();
+    if (!typed) return;
+    setQuickAdd('');
+    const listId = list?.id ?? (await newList()); // standalone: no list yet → create one
+    const itemId = newId();
+    await upsertRow('list_items', { list_id: listId, name: typed, is_manual: true }, itemId);
+    syncNow(['list_items']).catch(() => {});
+    try {
+      const res = await authedRequest(`/v1/match?item=${encodeURIComponent(typed)}&chains=${ALL_CHAINS.join(',')}`);
+      if (res.ok) {
+        const body = (await res.json()) as {
+          item: string; aisle_group_id: number | null; quantity: number | null; unit: string | null;
+        };
+        await upsertRow(
+          'list_items',
+          {
+            list_id: listId,
+            // parsed a quantity out of "2 kg aardappelen"? → clean term + qty fields
+            name: body.quantity != null ? body.item : typed,
+            quantity: body.quantity,
+            unit: body.unit,
+            item_normalised: body.item,
+            aisle_group_id: body.aisle_group_id,
+            is_manual: true,
+          },
+          itemId
+        );
+        await syncNow(['list_items']).catch(() => {});
+        refreshPricing();
+      }
+    } catch {
+      /* offline: item blijft staan onder Overig, verrijkt bij volgende sync */
+    }
+  }
+
+  /** L2 — remove / change quantity from the variant sheet. */
+  async function removeItem(item: ItemRow) {
+    setVariantItem(null);
+    await deleteRow('list_items', item.id);
+    syncNow(['list_items']).catch(() => {});
+    refreshPricing();
+  }
+
+  async function bumpQty(item: ItemRow, delta: number) {
+    const current = Number(item.quantity) || 1; // null reads as 1 (one pack)
+    const next = Math.max(1, Math.round((current + delta) * 100) / 100);
+    await upsertRow('list_items', { list_id: item.list_id, name: item.name, quantity: next, unit: item.unit }, item.id);
+    setVariantItem({ ...item, quantity: next });
+    syncNow(['list_items']).catch(() => {});
+    refreshPricing();
   }
 
   async function openVariants(item: ItemRow) {
@@ -170,13 +226,29 @@ export default function LijstScreen() {
           </Pressable>
         </View>
 
+        {/* L1 — quick-add: de lijst werkt ook zonder recepten; zonder lijst maakt hij er één */}
+        <View style={styles.quickAddRow}>
+          <TextInput
+            style={styles.quickAddInput}
+            placeholder="Voeg toe: melk, 2 kg aardappelen…"
+            placeholderTextColor="#97A08F"
+            value={quickAdd}
+            onChangeText={setQuickAdd}
+            onSubmitEditing={addManual}
+            returnKeyType="done"
+          />
+          <Pressable accessibilityLabel="Toevoegen" style={styles.quickAddBtn} onPress={addManual}>
+            <Plus size={18} color={colors.onPrimary} strokeWidth={2.4} />
+          </Pressable>
+        </View>
+
         {list ? (
           <>
             <View style={styles.titleRow}>
               <Text style={styles.listTitle}>{list.name}</Text>
             </View>
             <Text style={styles.metaLine}>
-              {items.length} items · {checkedCount} afgevinkt · live gekoppeld aan weekplan
+              {items.length} items · {checkedCount} afgevinkt
             </Text>
 
             {/* chain anchoring chips: totals + line prices per supermarkt */}
@@ -200,7 +272,7 @@ export default function LijstScreen() {
 
             {groups.length === 0 ? (
               <Text style={[type.meta, { textAlign: 'center', marginTop: 40 }]}>
-                Nog niets op de lijst. Voeg toe vanuit een recept of het weekmenu.
+                Nog niets op de lijst. Typ hierboven, of voeg toe vanuit een recept of het weekmenu.
               </Text>
             ) : (
               groups.map(({ group, items: groupItems }) => (
@@ -258,7 +330,7 @@ export default function LijstScreen() {
           </>
         ) : (
           <Text style={[type.meta, { textAlign: 'center', marginTop: 40 }]}>
-            Nog geen lijst voor deze week. Maak er één met “+ Nieuw” of plan gerechten in.
+            Nog geen lijst voor deze week. Typ hierboven je eerste item, tik “+ Nieuw”, of plan gerechten in.
           </Text>
         )}
       </ScrollView>
@@ -293,11 +365,30 @@ export default function LijstScreen() {
       {variantItem ? (
         <View style={[styles.sheet, { paddingBottom: insets.bottom + 100 }]}>
           <View style={styles.sheetHeader}>
-            <Text style={type.h3} numberOfLines={1}>
+            <Text style={[type.h3, { flex: 1 }]} numberOfLines={1}>
               {variantItem.name} — prijscontrole
             </Text>
             <Pressable onPress={() => setVariantItem(null)} hitSlop={10}>
               <X size={20} color={colors.textSoft} />
+            </Pressable>
+          </View>
+
+          {/* L2 — hoeveelheid + verwijderen, zodat een mis-import niet blijft staan */}
+          <View style={styles.qtyRow}>
+            <View style={styles.qtyStepper}>
+              <Pressable onPress={() => bumpQty(variantItem, -1)} hitSlop={8} style={styles.qtyBtn}>
+                <Minus size={15} color={colors.text} strokeWidth={2.2} />
+              </Pressable>
+              <Text style={styles.qtyValue}>
+                {String(variantItem.quantity ?? 1).replace('.', ',')}{variantItem.unit ? ` ${variantItem.unit}` : '×'}
+              </Text>
+              <Pressable onPress={() => bumpQty(variantItem, 1)} hitSlop={8} style={styles.qtyBtn}>
+                <Plus size={15} color={colors.text} strokeWidth={2.2} />
+              </Pressable>
+            </View>
+            <Pressable style={styles.removeBtn} onPress={() => removeItem(variantItem)}>
+              <Trash2 size={15} color={colors.danger} strokeWidth={2} />
+              <Text style={styles.removeText}>Verwijder van lijst</Text>
             </Pressable>
           </View>
 
@@ -417,6 +508,27 @@ const styles = StyleSheet.create({
     shadowColor: '#000', shadowOpacity: 0.14, shadowRadius: 18, shadowOffset: { width: 0, height: -6 }, elevation: 12,
   },
   sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  quickAddRow: { flexDirection: 'row', gap: 8 },
+  quickAddInput: {
+    flex: 1, backgroundColor: colors.surface, borderRadius: 13, paddingHorizontal: 13, paddingVertical: 10,
+    borderWidth: 1, borderColor: 'rgba(34,48,30,.12)', fontSize: 13.5, color: colors.text,
+  },
+  quickAddBtn: {
+    width: 42, borderRadius: 13, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center',
+  },
+  qtyRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  qtyStepper: {
+    flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.bg,
+    borderRadius: radius.pill, paddingHorizontal: 8, paddingVertical: 5,
+    borderWidth: 1, borderColor: 'rgba(34,48,30,.1)',
+  },
+  qtyBtn: {
+    width: 26, height: 26, borderRadius: 13, backgroundColor: colors.surface, alignItems: 'center',
+    justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(34,48,30,.12)',
+  },
+  qtyValue: { fontSize: 13, fontFamily: fonts.bodySemiBold, color: colors.text, minWidth: 40, textAlign: 'center' },
+  removeBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6, paddingHorizontal: 4 },
+  removeText: { fontSize: 12.5, fontFamily: fonts.bodySemiBold, color: colors.danger },
   sheetSection: {
     fontSize: 11, fontFamily: fonts.bodyBold, letterSpacing: 0.6, color: colors.textMuted, marginTop: 8,
   },

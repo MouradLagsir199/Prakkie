@@ -46,7 +46,7 @@ gehakt,\bgehakt\b,\b(vegetarisch|vega|kruiden|met ui)\b
 rundergehakt,rundergehakt,
 spekreepjes,spekreepjes|spekblokjes,
 chorizo,chorizo,
-zalm,\bzalm\b,\b(gerookt|salade|beleg)\b
+zalm,\bzalm(filet)?\b,\b(gerookt|salade|beleg|strips)\b
 garnalen,garnalen,
 tonijn,tonijn,\b(salade|pizza)\b
 tofu,\btofu\b|\btahoe\b,
@@ -54,7 +54,7 @@ kikkererwten,kikkererwten,
 linzen,linzen,\b(soep|schotel)\b
 zwarte bonen,zwarte bonen,
 kidneybonen,kidneybonen|rode nierbonen,
-rijst,\brijst\b,\b(wafel|melk|azijn)\b
+rijst,rijst\b,\b(wafel|melk|azijn)\b
 basmatirijst,basmati ?rijst,
 spaghetti,spaghetti,
 penne,\bpenne\b,
@@ -62,10 +62,10 @@ noedels,noedels|noodles|\bmie\b,
 couscous,couscous,
 quinoa,quinoa,
 bloem,\bbloem\b|tarwebloem|patentbloem,\bbloemkool\b
-suiker,\bsuiker\b,\b(basterd|poeder|vanille|riet|klontjes)\b
+suiker,\b(kristal)?suiker\b,\b(basterd|poeder|vanille|riet|klontjes)\b
 olijfolie,olijfolie,
 zonnebloemolie,zonnebloemolie,
-azijn,\bazijn\b,
+azijn,\b(natuur)?azijn\b,
 sojasaus,sojasaus|ketjap,
 sambal,sambal,
 mosterd,mosterd,\b(saus|soep)\b

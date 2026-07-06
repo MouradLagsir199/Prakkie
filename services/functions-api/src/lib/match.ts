@@ -140,7 +140,12 @@ export async function matchItem(
 ): Promise<Record<string, ChainMatch>> {
   const q = client ?? { query };
   const { term, aliases } = await resolveLexicon(item, client);
-  const searchTerms = [...new Set([item, term])];
+  // Dutch morphological aliases (plural/diminutive: uien, aardappelen) join the
+  // search — "aardappel" alone loses the whole-word boost against products named
+  // "…aardappelen", letting dish names win. Translations ("onion") stay out:
+  // they'd surface "AH Onion rings" for "ui". (UX-audit matching pass)
+  const morphAliases = aliases.filter((a) => a.includes(term) || term.includes(a));
+  const searchTerms = [...new Set([item, term, ...morphAliases])].slice(0, 6);
   const r = await q.query(CANDIDATE_SQL, [searchTerms, chainIds, SHORTLIST_SIZE, userId, [item], aliases]);
 
   const byChain: Record<string, MatchCandidate[]> = {};

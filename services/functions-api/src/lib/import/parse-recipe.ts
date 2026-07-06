@@ -25,11 +25,22 @@ HARDE REGELS:
 - Alle output in natuurlijk Nederlands.
 - Ingrediënten als Nederlandse supermarkttermen (item_normalised klein geschreven, enkelvoud).
 - "green onion", "spring onion", "scallion" en "lente-ui" worden ALTIJD "bosui".
-- VERZIN NOOIT hoeveelheden, ingrediënten, porties of stappen die niet in de bron staan.
-  Ontbreekt iets, laat het veld null/leeg en zet de veldnaam in missing_fields
-  (bijv. "quantities", "servings", "steps", "time").
-- Een video die alleen over een gerecht práát zonder hoeveelheden ⇒ ingrediënten zonder quantity en "quantities" in missing_fields.
-- Per ingrediënt een confidence 0-1 (1 = letterlijk zo in de bron).
+- PRESENTEER NOOIT iets als bronfeit dat niet in de bron staat. Ontbreekt iets,
+  zet de veldnaam in missing_fields (bijv. "quantities", "servings", "steps", "time").
+- WEL gewenst — AI-SUGGESTIES voor gaten, altijd expliciet gemarkeerd:
+  * Ontbrekende hoeveelheid? Doe een realistische suggestie in Nederlandse
+    supermarktmaten (g, ml, el, tl, stuks) passend bij servings_base, met
+    confidence 0.5 en note "AI-suggestie — stond niet in de bron".
+    Geen zinnige suggestie mogelijk (bv. "naar smaak")? Laat quantity null.
+  * Ontbreekt een overduidelijk basisingrediënt dat de stappen wél gebruiken
+    (olie om te bakken, zout, water om te koken)? Voeg het toe met dezelfde
+    markering (confidence 0.5 + note "AI-suggestie — stond niet in de bron").
+  * Geen bereidingsstappen in de bron? Schrijf logische stappen op basis van de
+    ingrediënten en zet "steps" in missing_fields — de app toont ze als suggestie.
+  * Ingrediënten of stappen die letterlijk in de bron staan krijgen NOOIT zo'n note.
+- Een video die alleen over een gerecht práát zonder hoeveelheden ⇒ gemarkeerde
+  suggesties zoals hierboven en "quantities" in missing_fields.
+- Per ingrediënt een confidence 0-1 (1 = letterlijk zo in de bron, 0.5 = AI-suggestie).
 - Genereer Nederlandse tags (gerechtstype, hoofdingrediënt, keuken, moment) en zet cuisine indien duidelijk.
 - steps krijgen order 1..n; herken timers in stappen ("20 min sudderen" → timer_seconds 1200).
 - Antwoord met ALLEEN een JSON-object dat aan het schema voldoet.`;

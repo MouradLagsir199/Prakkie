@@ -39,14 +39,19 @@ export default function ReceptenScreen() {
     currentUser().then((u) => setUserName(u?.display_name ?? '')).catch(() => {});
   }, []);
 
+  const [discoverState, setDiscoverState] = useState<'idle' | 'loading' | 'done' | 'offline'>('idle');
   useEffect(() => {
     if (segment !== 'ontdek') return;
+    setDiscoverState('loading');
     const t = setTimeout(async () => {
       try {
         const res = await authedRequest(`/v1/discover${query.trim() ? `?q=${encodeURIComponent(query.trim())}` : ''}`);
-        if (res.ok) setDiscover(((await res.json()) as { items: DiscoverItem[] }).items);
+        if (res.ok) {
+          setDiscover(((await res.json()) as { items: DiscoverItem[] }).items);
+          setDiscoverState('done');
+        } else setDiscoverState('offline');
       } catch {
-        /* Ontdek is online-only */
+        setDiscoverState('offline'); // Ontdek is online-only
       }
     }, query ? 350 : 0);
     return () => clearTimeout(t);
@@ -116,6 +121,7 @@ export default function ReceptenScreen() {
         title={searching ? 'Zoeken' : 'Mijn recepten'}
         greetingName={searching ? '' : userName}
         avatarInitial={(userName || 'P').slice(0, 1).toUpperCase()}
+        onAvatarPress={() => router.push('/instellingen')}
       />
       <View style={styles.segmentRow}>
         <View style={styles.segment}>
@@ -257,13 +263,33 @@ export default function ReceptenScreen() {
           )
         }
         ListEmptyComponent={
-          <Text style={[type.meta, styles.empty]}>
-            {segment === 'ontdek'
-              ? 'Ontdek laadt… (internet nodig)'
-              : loading
+          segment === 'ontdek' ? (
+            // R1/R2 — eerlijke Ontdek-staten: laden ≠ geen resultaat ≠ offline
+            <View style={{ gap: 10, alignItems: 'center' }}>
+              <Text style={[type.meta, styles.empty]}>
+                {discoverState === 'loading' || discoverState === 'idle'
+                  ? 'Ontdek laadt…'
+                  : discoverState === 'offline'
+                    ? 'Ontdek heeft internet nodig — controleer je verbinding.'
+                    : query.trim()
+                      ? `Niets gevonden voor “${query.trim()}” — Ontdek groeit elke nacht.`
+                      : 'Nog niets in Ontdek — kijk later nog eens.'}
+              </Text>
+              {discoverState === 'done' && query.trim() ? (
+                <Pressable onPress={() => router.push('/import')}>
+                  <Text style={[type.body, { color: colors.primary, fontFamily: fonts.bodySemiBold }]}>
+                    Zelf importeren via een link →
+                  </Text>
+                </Pressable>
+              ) : null}
+            </View>
+          ) : (
+            <Text style={[type.meta, styles.empty]}>
+              {loading
                 ? 'Recepten laden…'
                 : 'Nog geen recepten. Tik op + en plak een link van Instagram, TikTok of een receptenblog.'}
-          </Text>
+            </Text>
+          )
         }
       />
     </View>

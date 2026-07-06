@@ -163,6 +163,22 @@
 - [ ] Store listings, NL privacy policy, GDPR docs (owner/legal)
 - [ ] Legal reviews (a) product data (b) feed display depth (inputs #12)
 
+## UX-audit pass (2026-07-06) — elke tab standalone ([`11_ux_audit.md`](11_ux_audit.md))
+
+- [x] Audit: 18 bevindingen over 7 schermen + cross-cutting (4 🔴, 6 🟠) — alle 🔴/🟠 gefixt
+- [x] Lijst standalone: quick-add (offline-first + `/v1/match`-verrijking), item verwijderen/hoeveelheid, eerlijke copy
+- [x] Review: handmatig recept kan nu écht (ingrediënt/stap toevoegen+verwijderen+bewerken); bewerken wist stale normalisatie
+- [x] Import gap-fill (I2): parser suggereert ontbrekende hoeveelheden/basisingrediënten/stappen — áltijd gemarkeerd (confidence 0.5 + note "AI-suggestie"); review toont amber + stappen-pill
+- [x] Plannen: in-place recept-kiezer per dag, notitie-maaltijden zonder recept (migratie 0012), lijst-hergebruik i.p.v. duplicaten
+- [x] Instellingen-scherm (avatar op Recepten): naam, live ketens, personen, huishouden maken/uitnodigen/joinen (`GET /v1/households` toegevoegd)
+- [x] Onboarding: alleen 6 live ketens kiesbaar, rest "binnenkort" (`LIVE_CHAIN_IDS` in shared)
+- [x] Receptdetail terugknop; kookmodus stempelt `last_cooked_at` (sort "laatst gekookt" werkt)
+- [x] Prijzen: dode "Koken met aanbiedingen"-rail → conditioneel + echt (recepten × deals), lege staat met CTA
+- [x] Ontdek: laden ≠ geen-resultaat ≠ offline; 0-hits toont import-CTA
+- [x] Matcher: morfologische aliassen in zoektermen + `lexicon_products` rank-1 hints geseed (`scripts/seed-lexicon-hints.mjs`) — "ui"→uien i.p.v. "Gehakt met ui"
+- [x] Mockups 03/04/05/06 bijgewerkt op de audit-beslissingen (quick-add, AI-suggestie-conventie, + toevoegen, eerlijke meta)
+- [x] `scripts/e2e-components.mjs`: per-feature live suite — import ×3 echte sites + non-recipe fail, 20 NL-staples matching, lijst-lifecycle, notitie-maaltijd, regenerate-idempotentie, households
+
 ## Inputs from owner (see [`10_inputs-needed.md`](10_inputs-needed.md))
 
 - [x] 1 · Azure subscription + RG naming

@@ -1,4 +1,4 @@
-import { CHAIN_IDS, CHAINS, type ChainId } from '@prakkie/shared';
+import { CHAIN_IDS, CHAINS, LIVE_CHAIN_IDS, type ChainId } from '@prakkie/shared';
 import { useRouter } from 'expo-router';
 import { kv } from '../data/kv';
 import { Check, Minus, Plus } from 'lucide-react-native';
@@ -51,11 +51,19 @@ export default function Onboarding() {
       <Text style={[type.meta, { marginTop: 6 }]}>Kies je supers — de eerste is “jouw winkel”. Aanpassen kan altijd.</Text>
 
       <ScrollView contentContainerStyle={styles.chains} showsVerticalScrollIndicator={false}>
+        {/* C2 — alleen live ketens zijn kiesbaar; de rest komt met verticale schaal */}
         {CHAIN_IDS.map((id) => {
+          const live = LIVE_CHAIN_IDS.includes(id);
           const idx = selected.indexOf(id);
           return (
-            <Pressable key={id} style={[styles.chain, idx > -1 && styles.chainOn]} onPress={() => toggle(id)}>
+            <Pressable
+              key={id}
+              style={[styles.chain, idx > -1 && styles.chainOn, !live && { opacity: 0.45 }]}
+              disabled={!live}
+              onPress={() => toggle(id)}
+            >
               <Text style={[type.h3, idx > -1 && { color: colors.primary }]}>{CHAINS[id].displayName}</Text>
+              {!live ? <Text style={type.badge}>binnenkort</Text> : null}
               {idx === 0 ? <Text style={[type.badge, { color: colors.primary }]}>jouw winkel</Text> : null}
               {idx > -1 ? <Check size={18} color={colors.primary} /> : null}
             </Pressable>

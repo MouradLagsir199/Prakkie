@@ -21,11 +21,22 @@ const verify = (token: string): string | null => {
 };
 
 app.http('household-create', {
-  methods: ['POST'],
+  methods: ['GET', 'POST'],
   authLevel: 'anonymous',
   route: 'v1/households',
   handler: handler(async (req) => {
     const claims = await requireAuth(req);
+    if (req.method === 'GET') {
+      // settings screen (UX-audit C3): which households am I in?
+      const r = await query(
+        `SELECT h.id, h.name, hm.role,
+                (SELECT count(*)::int FROM app.household_members m WHERE m.household_id = h.id) AS member_count
+         FROM app.household_members hm JOIN app.households h ON h.id = hm.household_id
+         WHERE hm.user_id = $1 ORDER BY hm.joined_at`,
+        [claims.userId]
+      );
+      return json(200, { households: r.rows });
+    }
     const body = await parseBody(req, z.object({ name: z.string().min(1).max(60) }));
     const household = await withTransaction(async (tx) => {
       const h = (

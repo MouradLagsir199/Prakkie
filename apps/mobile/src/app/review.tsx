@@ -1,6 +1,6 @@
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
-import { Check, ChevronDown, ChevronUp } from 'lucide-react-native';
+import { Check, ChevronDown, ChevronUp, Plus, Trash2 } from 'lucide-react-native';
 import { useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -22,9 +22,11 @@ export default function ReviewScreen() {
   const [title, setTitle] = useState(outcome?.recipe.title ?? '');
   const [ingredients, setIngredients] = useState(outcome?.recipe.ingredients ?? []);
   const [servings, setServings] = useState(outcome?.recipe.servings_base ?? 2);
-  const [stepsOpen, setStepsOpen] = useState(false);
+  const [steps, setSteps] = useState(outcome?.recipe.steps ?? []);
+  // manual entry (I1): open the steps editor right away when there's nothing yet
+  const [stepsOpen, setStepsOpen] = useState((outcome?.recipe.steps ?? []).length === 0);
   const [editIdx, setEditIdx] = useState<number | null>(null);
-  const steps = outcome?.recipe.steps ?? [];
+  const [stepEditIdx, setStepEditIdx] = useState<number | null>(null);
 
   if (!outcome) {
     return (
@@ -37,15 +39,45 @@ export default function ReviewScreen() {
     );
   }
   const r = outcome.recipe;
+  const isManual = !r.source_url && outcome.importId === '';
   const platformLabel =
     r.source_platform === 'instagram' ? 'Reel' : r.source_platform === 'tiktok' ? 'TikTok' :
     r.source_platform === 'blog' ? 'Website' : (r.source_platform ?? 'Import');
   const uncertain = (i: { confidence?: number | null }) => (i.confidence ?? 1) < 0.7;
   const allRecognised = !ingredients.some(uncertain) && (r.missing_fields ?? []).length === 0;
+  // parser gap-fill (I2): steps that weren't in the source are AI suggestions
+  const stepsSuggested = (r.missing_fields ?? []).includes('steps') && steps.length > 0;
+
+  type Ing = (typeof ingredients)[number];
+  function addIngredient() {
+    const blank = { raw_text: '', quantity: null, unit: null, item_normalised: null, note: null, confidence: 1 } as Ing;
+    setIngredients([...ingredients, blank]);
+    setEditIdx(ingredients.length);
+  }
+  function removeIngredient(i: number) {
+    setEditIdx(null);
+    setIngredients(ingredients.filter((_, j) => j !== i));
+  }
+  function addStep() {
+    setSteps([...steps, { order: steps.length + 1, text: '' }]);
+    setStepsOpen(true);
+    setStepEditIdx(steps.length);
+  }
+  function removeStep(i: number) {
+    setStepEditIdx(null);
+    setSteps(steps.filter((_, j) => j !== i).map((s, j) => ({ ...s, order: j + 1 })));
+  }
 
   async function save() {
     if (!title.trim()) {
       Alert.alert('Titel ontbreekt', 'Geef het recept een naam.');
+      return;
+    }
+    // drop rows the user left empty; a recipe needs at least one real ingredient
+    const cleanIngredients = ingredients.filter((i) => (i.raw_text ?? i.item_normalised ?? '').trim());
+    const cleanSteps = steps.filter((s) => s.text.trim()).map((s, j) => ({ ...s, order: j + 1 }));
+    if (cleanIngredients.length === 0) {
+      Alert.alert('Nog geen ingrediënten', 'Voeg minstens één ingrediënt toe.');
       return;
     }
     const id = r.id && r.id.length === 36 ? r.id : newId();
@@ -61,8 +93,8 @@ export default function ReviewScreen() {
         servings_base: servings,
         time_prep_min: r.time_prep_min ?? null,
         time_cook_min: r.time_cook_min ?? null,
-        ingredients,
-        steps,
+        ingredients: cleanIngredients,
+        steps: cleanSteps,
         tags: r.tags ?? [],
         cuisine: r.cuisine ?? null,
         diet_flags: (r as { diet_flags?: string[] }).diet_flags ?? [],
@@ -97,9 +129,11 @@ export default function ReviewScreen() {
         <View style={styles.successStrip}>
           <Check size={15} color={colors.primary} strokeWidth={2.2} />
           <Text style={styles.successText}>
-            {outcome.warnings.length
-              ? `Geïmporteerd met ${outcome.warnings.length} aandachtspunt(en) — kijk de gemarkeerde regels na`
-              : 'Geïmporteerd — caption, beeld en structuur gecombineerd'}
+            {isManual
+              ? 'Nieuw recept — vul titel, ingrediënten en stappen in'
+              : outcome.warnings.length
+                ? `Geïmporteerd met ${outcome.warnings.length} aandachtspunt(en) — kijk de gemarkeerde regels na`
+                : 'Geïmporteerd — caption, beeld en structuur gecombineerd'}
           </Text>
         </View>
 
@@ -139,10 +173,11 @@ export default function ReviewScreen() {
           ) : null}
         </View>
 
-        {(r.missing_fields ?? []).length > 0 ? (
+        {(r.missing_fields ?? []).length > 0 && !isManual ? (
           <View style={styles.warnStrip}>
             <Text style={styles.warnReason}>
-              Niet gevonden in de bron: {r.missing_fields!.join(', ')} — we verzinnen niets, vul aan waar nodig.
+              Niet in de bron gevonden: {r.missing_fields!.join(', ')}. AI-suggesties zijn amber gemarkeerd —
+              niets wordt stilletjes verzonnen, pas aan waar nodig.
             </Text>
           </View>
         ) : null}
@@ -160,13 +195,28 @@ export default function ReviewScreen() {
                 onPress={() => setEditIdx(editIdx === i ? null : i)}
               >
                 {editIdx === i ? (
-                  <TextInput
-                    style={styles.ingEdit}
-                    value={ing.raw_text ?? ''}
-                    autoFocus
-                    onChangeText={(t) => setIngredients(ingredients.map((x, j) => (j === i ? { ...x, raw_text: t } : x)))}
-                    onBlur={() => setEditIdx(null)}
-                  />
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <TextInput
+                      style={[styles.ingEdit, { flex: 1 }]}
+                      value={ing.raw_text ?? ''}
+                      autoFocus
+                      placeholder="bijv. 200 g penne"
+                      placeholderTextColor={colors.textMuted}
+                      // user text wins: stale normalisation weg, server herleidt bij lijst/prijs (I3)
+                      onChangeText={(t) =>
+                        setIngredients(
+                          ingredients.map((x, j) =>
+                            j === i ? { ...x, raw_text: t, item_normalised: null, confidence: 1, note: null } : x
+                          )
+                        )
+                      }
+                      onBlur={() => setEditIdx(null)}
+                      onSubmitEditing={() => setEditIdx(null)}
+                    />
+                    <Pressable hitSlop={8} onPress={() => removeIngredient(i)}>
+                      <Trash2 size={16} color={colors.textMuted} />
+                    </Pressable>
+                  </View>
                 ) : (
                   <>
                     <View style={styles.ingTop}>
@@ -181,17 +231,27 @@ export default function ReviewScreen() {
                         {warn ? <Text style={styles.checkPill}>controleer</Text> : null}
                       </View>
                     </View>
+                    {/* I4: bron-tekst niet verliezen als de hoeveelheid niet parste */}
+                    {ing.quantity == null && ing.raw_text && ing.raw_text !== name ? (
+                      <Text style={styles.rawSubline} numberOfLines={1}>{ing.raw_text}</Text>
+                    ) : null}
                     {warn && ing.note ? <Text style={styles.warnReason}>{ing.note}</Text> : null}
                   </>
                 )}
               </Pressable>
             );
           })}
+          {/* I1 — handmatig én import: altijd een regel kunnen toevoegen */}
+          <Pressable style={[styles.addRow, ingredients.length > 0 && styles.rowBorderTop]} onPress={addIngredient}>
+            <Plus size={15} color={colors.primary} strokeWidth={2.4} />
+            <Text style={styles.addRowText}>Ingrediënt toevoegen</Text>
+          </Pressable>
         </View>
 
         <Pressable style={styles.stepsRow} onPress={() => setStepsOpen(!stepsOpen)}>
           <Text style={styles.stepsTitle}>Bereiding · {steps.length} stappen</Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            {stepsSuggested ? <Text style={styles.checkPill}>AI-suggestie</Text> : null}
             {allRecognised ? (
               <>
                 <Text style={styles.recognised}>Alles herkend</Text>
@@ -203,12 +263,43 @@ export default function ReviewScreen() {
         </Pressable>
         {stepsOpen ? (
           <View style={[styles.card, { marginTop: 8 }]}>
+            {stepsSuggested ? (
+              <Text style={[styles.warnReason, { paddingHorizontal: 14, paddingTop: 10 }]}>
+                De bron had geen stappen — dit is een AI-voorstel. Lees en pas aan.
+              </Text>
+            ) : null}
             {steps.map((s, i) => (
-              <View key={s.order} style={[styles.stepItem, i < steps.length - 1 && styles.rowBorder]}>
+              <Pressable
+                key={i}
+                style={[styles.stepItem, i < steps.length - 1 && styles.rowBorder]}
+                onPress={() => setStepEditIdx(stepEditIdx === i ? null : i)}
+              >
                 <Text style={styles.stepNum}>{s.order}</Text>
-                <Text style={[type.body, { flex: 1, fontSize: 13.5 }]}>{s.text}</Text>
-              </View>
+                {stepEditIdx === i ? (
+                  <View style={{ flex: 1, flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}>
+                    <TextInput
+                      style={[styles.ingEdit, { flex: 1 }]}
+                      value={s.text}
+                      autoFocus
+                      multiline
+                      placeholder="Beschrijf deze stap…"
+                      placeholderTextColor={colors.textMuted}
+                      onChangeText={(t) => setSteps(steps.map((x, j) => (j === i ? { ...x, text: t } : x)))}
+                      onBlur={() => setStepEditIdx(null)}
+                    />
+                    <Pressable hitSlop={8} onPress={() => removeStep(i)}>
+                      <Trash2 size={16} color={colors.textMuted} />
+                    </Pressable>
+                  </View>
+                ) : (
+                  <Text style={[type.body, { flex: 1, fontSize: 13.5 }]}>{s.text || 'tik om te schrijven…'}</Text>
+                )}
+              </Pressable>
             ))}
+            <Pressable style={[styles.addRow, steps.length > 0 && styles.rowBorderTop]} onPress={addStep}>
+              <Plus size={15} color={colors.primary} strokeWidth={2.4} />
+              <Text style={styles.addRowText}>Stap toevoegen</Text>
+            </Pressable>
           </View>
         ) : null}
       </ScrollView>
@@ -251,6 +342,10 @@ const styles = StyleSheet.create({
     borderRadius: 16, overflow: 'hidden',
   },
   rowBorder: { borderBottomWidth: 1, borderBottomColor: 'rgba(34,48,30,.06)' },
+  rowBorderTop: { borderTopWidth: 1, borderTopColor: 'rgba(34,48,30,.06)' },
+  addRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 12 },
+  addRowText: { fontSize: 13, fontFamily: fonts.bodySemiBold, color: colors.primary },
+  rawSubline: { fontSize: 11, color: '#97A08F' },
   ingRow: { paddingHorizontal: 14, paddingVertical: 11, gap: 4 },
   ingWarn: { backgroundColor: '#FBF0DC' },
   ingTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 },

@@ -1,9 +1,9 @@
 import { DAY_ABBREV_NL, formatEuroCents, formatPricePerPortion } from '@prakkie/shared';
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
-import { ChevronLeft, ChevronRight, ListChecks, Plus } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, ListChecks, Plus, StickyNote, X } from 'lucide-react-native';
 import { useMemo, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { deleteRow, newId, syncNow, upsertRow, useEntityRows } from '../../data';
 import { authedRequest } from '../../data/api';
@@ -16,7 +16,8 @@ import { colors, fonts, radius, type } from '../../theme/tokens';
 
 interface PlanRow { id: string; week_start: string }
 interface EntryRow {
-  id: string; plan_id: string; recipe_id: string; entry_date: string | null; meal_slot: string; servings: number;
+  id: string; plan_id: string; recipe_id: string | null; title?: string | null;
+  entry_date: string | null; meal_slot: string; servings: number;
 }
 
 export default function PlannenScreen() {
@@ -26,8 +27,13 @@ export default function PlannenScreen() {
   const { rows: planRows } = useEntityRows('plans');
   const { rows: entryRows } = useEntityRows('plan_entries');
   const { rows: recipeRows } = useEntityRows('recipes');
+  const { rows: listRows } = useEntityRows('lists');
   const [moveEntry, setMoveEntry] = useState<EntryRow | null>(null);
   const [generating, setGenerating] = useState(false);
+  // P1 — in-place kiezer: welke dag krijgt een gerecht/notitie?
+  const [pickDate, setPickDate] = useState<string | null>(null);
+  const [pickFilter, setPickFilter] = useState('');
+  const [noteText, setNoteText] = useState('');
 
   const weekStart = mondayOf(weekOffset);
   const plan = planRows
@@ -60,25 +66,69 @@ export default function PlannenScreen() {
     if (!moveEntry) return;
     await upsertRow(
       'plan_entries',
-      { plan_id: moveEntry.plan_id, recipe_id: moveEntry.recipe_id, servings: moveEntry.servings, entry_date: date },
+      {
+        plan_id: moveEntry.plan_id, recipe_id: moveEntry.recipe_id, title: moveEntry.title ?? null,
+        servings: moveEntry.servings, entry_date: date,
+      },
       moveEntry.id
     );
     setMoveEntry(null);
     syncNow(['plan_entries']).catch(() => {});
   }
 
+  /** P1/P3 — plan a recipe or free-text note straight onto a day. */
+  async function ensurePlanId(): Promise<string> {
+    if (plan) return plan.id;
+    const id = newId();
+    await upsertRow('plans', { week_start: weekStart }, id);
+    return id;
+  }
+
+  async function planRecipe(recipe: RecipeRowData & { id: string }) {
+    const planId = await ensurePlanId();
+    await upsertRow('plan_entries', {
+      plan_id: planId, recipe_id: recipe.id, entry_date: pickDate === 'undated' ? null : pickDate,
+      meal_slot: 'dinner', servings: recipe.servings_base ?? 2,
+    });
+    setPickDate(null);
+    setPickFilter('');
+    syncNow(['plans', 'plan_entries']).catch(() => {});
+  }
+
+  async function planNote() {
+    const text = noteText.trim();
+    if (!text) return;
+    const planId = await ensurePlanId();
+    await upsertRow('plan_entries', {
+      plan_id: planId, recipe_id: null, title: text, entry_date: pickDate === 'undated' ? null : pickDate,
+      meal_slot: 'dinner', servings: 1,
+    });
+    setNoteText('');
+    setPickDate(null);
+    syncNow(['plans', 'plan_entries']).catch(() => {});
+  }
+
+  const recipeEntries = entries.filter((e) => e.recipe_id);
+
   async function makeList() {
-    if (entries.length === 0) return;
+    if (recipeEntries.length === 0) return;
     setGenerating(true);
     try {
-      await syncNow(['plans', 'plan_entries']);
-      const listId = newId();
-      await upsertRow('lists', { name: 'Weekboodschappen', week_start: weekStart }, listId);
-      await syncNow(['lists']);
+      await syncNow(['lists', 'plans', 'plan_entries']);
+      // P2 — reuse this week's list: generated lines replace, manual items survive
+      const existing = listRows
+        .map((r) => ({ id: r.id, ...(r.row as { week_start?: string | null }) }))
+        .find((l) => (l.week_start ?? '').slice(0, 10) === weekStart);
+      let listId = existing?.id;
+      if (!listId) {
+        listId = newId();
+        await upsertRow('lists', { name: 'Weekboodschappen', week_start: weekStart }, listId);
+        await syncNow(['lists']);
+      }
       const res = await authedRequest(`/v1/lists/${listId}/generate`, {
         method: 'POST',
         body: JSON.stringify({
-          recipes: entries.map((e) => ({ recipe_id: e.recipe_id, servings: e.servings })),
+          recipes: recipeEntries.map((e) => ({ recipe_id: e.recipe_id, servings: e.servings })),
           replace_generated: true,
         }),
       });
@@ -93,7 +143,9 @@ export default function PlannenScreen() {
   }
 
   const entryCard = (entry: EntryRow) => {
-    const recipe = recipeById.get(entry.recipe_id);
+    const recipe = entry.recipe_id ? recipeById.get(entry.recipe_id) : undefined;
+    const isNote = !entry.recipe_id;
+    const label = recipe?.title ?? entry.title ?? 'Recept';
     const pp = recipe?.price_cache?.per_portion_cents;
     return (
       <Pressable
@@ -101,7 +153,7 @@ export default function PlannenScreen() {
         style={styles.entryCard}
         onPress={() => setMoveEntry(entry)}
         onLongPress={() =>
-          Alert.alert('Van het menu halen?', recipe?.title ?? '', [
+          Alert.alert('Van het menu halen?', label, [
             { text: 'Annuleren', style: 'cancel' },
             {
               text: 'Verwijderen', style: 'destructive',
@@ -113,19 +165,29 @@ export default function PlannenScreen() {
           ])
         }
       >
-        <Image source={{ uri: recipe ? recipeImage(recipe) : undefined }} style={styles.entryThumb} contentFit="cover" />
+        {isNote ? (
+          <View style={[styles.entryThumb, styles.noteThumb]}>
+            <StickyNote size={17} color={colors.primary} strokeWidth={1.9} />
+          </View>
+        ) : (
+          <Image source={{ uri: recipe ? recipeImage(recipe) : undefined }} style={styles.entryThumb} contentFit="cover" />
+        )}
         <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-          <Text style={styles.entryTitle} numberOfLines={1}>{recipe?.title ?? 'Recept'}</Text>
+          <Text style={styles.entryTitle} numberOfLines={1}>{label}</Text>
           <Text style={styles.entryMeta}>
-            {entry.servings} pers.{pp ? ` · ${formatPricePerPortion(pp)}` : ''}
+            {isNote ? 'eigen notitie' : `${entry.servings} pers.${pp ? ` · ${formatPricePerPortion(pp)}` : ''}`}
           </Text>
         </View>
-        <Pressable onPress={() => setServings(entry, -1)} hitSlop={8} style={styles.srvBtn}>
-          <Text style={styles.srvText}>−</Text>
-        </Pressable>
-        <Pressable onPress={() => setServings(entry, 1)} hitSlop={8} style={styles.srvBtn}>
-          <Text style={styles.srvText}>+</Text>
-        </Pressable>
+        {isNote ? null : (
+          <>
+            <Pressable onPress={() => setServings(entry, -1)} hitSlop={8} style={styles.srvBtn}>
+              <Text style={styles.srvText}>−</Text>
+            </Pressable>
+            <Pressable onPress={() => setServings(entry, 1)} hitSlop={8} style={styles.srvBtn}>
+              <Text style={styles.srvText}>+</Text>
+            </Pressable>
+          </>
+        )}
       </Pressable>
     );
   };
@@ -163,7 +225,7 @@ export default function PlannenScreen() {
                   {filled ? (
                     dayEntries.map(entryCard)
                   ) : (
-                    <Pressable style={styles.emptySlot} onPress={() => router.push('/')}>
+                    <Pressable style={styles.emptySlot} onPress={() => setPickDate(day.date)}>
                       <Plus size={14} color="#97A08F" strokeWidth={2.2} />
                       <Text style={styles.emptyText}>Kies een recept voor deze dag</Text>
                     </Pressable>
@@ -179,29 +241,90 @@ export default function PlannenScreen() {
             <Text style={{ fontFamily: fonts.bodyBold }}>Zonder datum</Text> · deze week nog inplannen
           </Text>
           <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', flexShrink: 1, justifyContent: 'flex-end' }}>
-            {undated.length === 0 ? (
-              <Text style={type.meta}>leeg</Text>
-            ) : (
-              undated.map((e) => (
-                <Pressable key={e.id} style={styles.undatedPill} onPress={() => setMoveEntry(e)}>
-                  <Text style={styles.undatedPillText} numberOfLines={1}>
-                    {recipeById.get(e.recipe_id)?.title ?? 'Recept'}
-                  </Text>
-                </Pressable>
-              ))
-            )}
+            {undated.map((e) => (
+              <Pressable key={e.id} style={styles.undatedPill} onPress={() => setMoveEntry(e)}>
+                <Text style={styles.undatedPillText} numberOfLines={1}>
+                  {(e.recipe_id ? recipeById.get(e.recipe_id)?.title : e.title) ?? 'Recept'}
+                </Text>
+              </Pressable>
+            ))}
+            <Pressable style={styles.undatedPill} onPress={() => setPickDate('undated')}>
+              <Text style={styles.undatedPillText}>+ toevoegen</Text>
+            </Pressable>
           </View>
         </View>
       </ScrollView>
 
-      {entries.length > 0 ? (
+      {recipeEntries.length > 0 ? (
         <View style={[styles.ctaWrap, { paddingBottom: insets.bottom + 96 }]}>
           <Pressable style={styles.cta} onPress={makeList} disabled={generating}>
             <ListChecks size={17} color={colors.onPrimary} strokeWidth={2} />
             <Text style={styles.ctaText}>
-              {generating ? 'Lijst maken…' : `Boodschappenlijst maken · ${entries.length} ${entries.length === 1 ? 'gerecht' : 'gerechten'}`}
+              {generating ? 'Lijst maken…' : `Boodschappenlijst maken · ${recipeEntries.length} ${recipeEntries.length === 1 ? 'gerecht' : 'gerechten'}`}
             </Text>
           </Pressable>
+        </View>
+      ) : null}
+
+      {/* P1/P3 — in-place kiezer: recept uit je bibliotheek óf een vrije notitie */}
+      {pickDate ? (
+        <View style={[styles.sheet, { paddingBottom: insets.bottom + 100 }]}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Text style={type.h3}>
+              Wat eet je {pickDate === 'undated'
+                ? 'deze week'
+                : `${days.find((d) => d.date === pickDate)?.label ?? ''} ${days.find((d) => d.date === pickDate)?.dayNum ?? ''}`}?
+            </Text>
+            <Pressable onPress={() => setPickDate(null)} hitSlop={10}>
+              <X size={20} color={colors.textSoft} />
+            </Pressable>
+          </View>
+
+          {recipeRows.length > 6 ? (
+            <TextInput
+              style={styles.pickInput}
+              placeholder="Zoek in je recepten…"
+              placeholderTextColor="#97A08F"
+              value={pickFilter}
+              onChangeText={setPickFilter}
+            />
+          ) : null}
+
+          <ScrollView style={{ maxHeight: 260 }} showsVerticalScrollIndicator={false}>
+            {recipeRows.length === 0 ? (
+              <Pressable style={styles.pickEmpty} onPress={() => { setPickDate(null); router.push('/import'); }}>
+                <Text style={[type.body, { color: colors.primary }]}>
+                  Nog geen recepten — importeer je eerste via +
+                </Text>
+              </Pressable>
+            ) : (
+              recipeRows
+                .map((row) => ({ ...(row.row as unknown as RecipeRowData), id: row.id }))
+                .filter((r) => !pickFilter.trim() || r.title.toLowerCase().includes(pickFilter.trim().toLowerCase()))
+                .slice(0, 20)
+                .map((r) => (
+                  <Pressable key={r.id} style={styles.pickRow} onPress={() => planRecipe(r)}>
+                    <Image source={{ uri: recipeImage(r) }} style={styles.pickThumb} contentFit="cover" />
+                    <Text style={[type.body, { flex: 1, fontSize: 13.5 }]} numberOfLines={1}>{r.title}</Text>
+                    <Text style={type.meta}>{r.servings_base ?? 2} pers.</Text>
+                  </Pressable>
+                ))
+            )}
+          </ScrollView>
+
+          <View style={styles.noteRow}>
+            <TextInput
+              style={[styles.pickInput, { flex: 1, marginTop: 0 }]}
+              placeholder="of typ zelf: uit eten, restjes…"
+              placeholderTextColor="#97A08F"
+              value={noteText}
+              onChangeText={setNoteText}
+              onSubmitEditing={planNote}
+            />
+            <Pressable style={styles.noteBtn} onPress={planNote}>
+              <StickyNote size={16} color={colors.onPrimary} strokeWidth={2} />
+            </Pressable>
+          </View>
         </View>
       ) : null}
 
@@ -277,6 +400,19 @@ const styles = StyleSheet.create({
     position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: colors.surface,
     borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: 20, gap: 14,
     shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 16, shadowOffset: { width: 0, height: -6 }, elevation: 10,
+  },
+  noteThumb: { alignItems: 'center', justifyContent: 'center', backgroundColor: colors.badgeBg },
+  pickInput: {
+    marginTop: 4, backgroundColor: colors.bg, borderRadius: 12, paddingHorizontal: 13, paddingVertical: 10,
+    borderWidth: 1, borderColor: 'rgba(34,48,30,.12)', fontSize: 13.5, color: colors.text,
+  },
+  pickRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
+  pickThumb: { width: 36, height: 36, borderRadius: 9, backgroundColor: '#EDE7D8' },
+  pickEmpty: { paddingVertical: 14, alignItems: 'center' },
+  noteRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+  noteBtn: {
+    width: 42, height: 42, borderRadius: 12, backgroundColor: colors.primary,
+    alignItems: 'center', justifyContent: 'center',
   },
   moveDays: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   moveDay: {

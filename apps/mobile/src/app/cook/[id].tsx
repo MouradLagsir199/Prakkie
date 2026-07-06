@@ -4,7 +4,7 @@ import { ChevronLeft, ChevronRight, TimerReset, X } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, Vibration, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { getData } from '../../data';
+import { getData, syncNow, upsertRow } from '../../data';
 import type { RecipeRowData } from '../../data/recipes';
 import { colors, radius, type } from '../../theme/tokens';
 
@@ -115,7 +115,17 @@ export default function CookMode() {
             <ChevronRight size={28} color={colors.onPrimary} />
           </Pressable>
         ) : (
-          <Pressable style={[styles.navBtn, styles.navPrimary]} onPress={() => router.back()}>
+          <Pressable
+            style={[styles.navBtn, styles.navPrimary]}
+            onPress={async () => {
+              // R3 — voedt de sorteeroptie "laatst gekookt"
+              if (recipe) {
+                await upsertRow('recipes', { title: recipe.title, last_cooked_at: new Date().toISOString() }, String(id));
+                syncNow(['recipes']).catch(() => {});
+              }
+              router.back();
+            }}
+          >
             <Text style={[type.body, { color: colors.onPrimary }]}>Klaar · Eet smakelijk!</Text>
           </Pressable>
         )}

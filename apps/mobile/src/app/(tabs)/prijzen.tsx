@@ -1,11 +1,13 @@
 import { formatEuroCents } from '@prakkie/shared';
-import { ChevronRight, RefreshCw, TrendingDown } from 'lucide-react-native';
+import { useRouter } from 'expo-router';
+import { ChevronDown, ChevronRight, RefreshCw, TrendingDown } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useEntityRows } from '../../data';
 import { authedRequest } from '../../data/api';
 import { CHAIN_BRAND, chainChip, chainName, mondayOf } from '../../data/chains';
+import type { RecipeRowData } from '../../data/recipes';
 import { colors, fonts, radius, type } from '../../theme/tokens';
 
 /** Prijzen — mockup 07 1:1: "Jouw mandje per supermarkt" card with brand
@@ -23,12 +25,15 @@ interface Deal { chain_id: string; item: string; product_name?: string; promo?: 
 
 export default function PrijzenScreen() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const { rows: listRows } = useEntityRows('lists');
   const { rows: itemRows } = useEntityRows('list_items');
+  const { rows: recipeRows } = useEntityRows('recipes');
   const [result, setResult] = useState<CompareResult | null>(null);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [railOpen, setRailOpen] = useState(false);
 
   // this week's list first, else the most recent one
   const weekStart = mondayOf(0);
@@ -63,6 +68,23 @@ export default function PrijzenScreen() {
   useEffect(() => {
     load();
   }, [load, itemCount]);
+
+  // PR1 — recepten uit eigen bibliotheek die op actuele deals leunen
+  const bonusRecipes = useMemo(() => {
+    if (!deals.length) return [];
+    const dealItems = deals.map((d) => d.item.toLowerCase());
+    return recipeRows
+      .map((row) => ({ ...(row.row as unknown as RecipeRowData), id: row.id }))
+      .map((r) => ({
+        recipe: r,
+        hits: (r.ingredients ?? []).filter((i) =>
+          dealItems.some((d) => (i.item_normalised ?? i.raw_text ?? '').toLowerCase().includes(d))
+        ).length,
+      }))
+      .filter((x) => x.hits > 0)
+      .sort((a, b) => b.hits - a.hits)
+      .slice(0, 5);
+  }, [deals, recipeRows]);
 
   const allChains = [...(result?.ranked ?? []), ...(result?.partial ?? [])];
   const maxTotal = Math.max(...allChains.map((c) => c.total_cents), 1);
@@ -122,7 +144,13 @@ export default function PrijzenScreen() {
         </Text>
 
         {!list ? (
-          <Text style={[type.meta, styles.center]}>Maak eerst een boodschappenlijst — dan vergelijken we hier de supers.</Text>
+          <View style={{ alignItems: 'center', gap: 14 }}>
+            <Text style={[type.meta, styles.center]}>Maak eerst een boodschappenlijst — dan vergelijken we hier de supers.</Text>
+            {/* PR2 — geef de lege staat een uitweg */}
+            <Pressable style={styles.emptyCta} onPress={() => router.push('/lijst')}>
+              <Text style={styles.emptyCtaText}>Naar de lijst →</Text>
+            </Pressable>
+          </View>
         ) : error ? (
           <Text style={[type.meta, styles.center]}>{error}</Text>
         ) : !result ? (
@@ -155,7 +183,7 @@ export default function PrijzenScreen() {
 
             <View style={styles.sectionRow}>
               <Text style={styles.cardTitle}>Van jouw lijst in de aanbieding</Text>
-              <Text style={styles.sectionLink}>Alles · {deals.length}</Text>
+              {deals.length > 0 ? <Text style={styles.sectionLink}>Alles · {deals.length}</Text> : null}
             </View>
             {deals.length === 0 ? (
               <Text style={type.meta}>Geen actieve aanbiedingen op je lijst — we checken elke nacht opnieuw.</Text>
@@ -179,13 +207,41 @@ export default function PrijzenScreen() {
               </View>
             )}
 
-            <Pressable style={styles.rail} onPress={() => {}}>
-              <Text style={styles.railText}>
-                <Text style={{ fontFamily: fonts.bodyBold }}>Koken met aanbiedingen</Text> · recepten uit je bibliotheek die
-                leunen op deals van deze week
-              </Text>
-              <ChevronRight size={14} color={colors.textSoft} strokeWidth={2.2} />
-            </Pressable>
+            {/* PR1 — alleen tonen mét deals; tik toont de recepten die erop leunen */}
+            {bonusRecipes.length > 0 ? (
+              <>
+                <Pressable style={styles.rail} onPress={() => setRailOpen(!railOpen)}>
+                  <Text style={styles.railText}>
+                    <Text style={{ fontFamily: fonts.bodyBold }}>Koken met aanbiedingen</Text> · {bonusRecipes.length}{' '}
+                    {bonusRecipes.length === 1 ? 'recept leunt' : 'recepten leunen'} op deals van deze week
+                  </Text>
+                  {railOpen ? (
+                    <ChevronDown size={14} color={colors.textSoft} strokeWidth={2.2} />
+                  ) : (
+                    <ChevronRight size={14} color={colors.textSoft} strokeWidth={2.2} />
+                  )}
+                </Pressable>
+                {railOpen ? (
+                  <View style={styles.dealsCard}>
+                    {bonusRecipes.map(({ recipe: r, hits }, i) => (
+                      <Pressable
+                        key={r.id}
+                        style={[styles.dealRow, i < bonusRecipes.length - 1 && styles.dealBorder]}
+                        onPress={() => router.push(`/recipe/${r.id}`)}
+                      >
+                        <View style={{ flex: 1, gap: 2, minWidth: 0 }}>
+                          <Text style={styles.dealName} numberOfLines={1}>{r.title}</Text>
+                          <Text style={styles.dealMechanic}>
+                            {hits} {hits === 1 ? 'ingrediënt' : 'ingrediënten'} in de bonus
+                          </Text>
+                        </View>
+                        <ChevronRight size={14} color={colors.textSoft} strokeWidth={2.2} />
+                      </Pressable>
+                    ))}
+                  </View>
+                ) : null}
+              </>
+            ) : null}
 
             <Pressable style={styles.refresh} onPress={load}>
               <RefreshCw size={15} color={colors.primary} />
@@ -244,4 +300,8 @@ const styles = StyleSheet.create({
   },
   railText: { flex: 1, fontSize: 12.5, color: colors.textSoft },
   refresh: { flexDirection: 'row', gap: 8, alignItems: 'center', justifyContent: 'center', padding: 12 },
+  emptyCta: {
+    backgroundColor: colors.primary, borderRadius: radius.pill, paddingHorizontal: 20, paddingVertical: 11,
+  },
+  emptyCtaText: { fontSize: 13.5, fontFamily: fonts.bodySemiBold, color: colors.onPrimary },
 });

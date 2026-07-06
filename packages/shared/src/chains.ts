@@ -50,3 +50,10 @@ export const CHAINS: Record<ChainId, ChainInfo> = {
 };
 
 export const DEFAULT_HOME_CHAIN: ChainId = 'ah';
+
+/**
+ * Chains with a live, seeded assortment (mirrors catalog.chains.enabled).
+ * User-facing pickers offer only these; the rest show as "binnenkort"
+ * (UX-audit C2). Vertical scaling flips a chain here once its connector runs.
+ */
+export const LIVE_CHAIN_IDS: readonly ChainId[] = ['ah', 'jumbo', 'plus', 'dirk', 'spar', 'aldi'];

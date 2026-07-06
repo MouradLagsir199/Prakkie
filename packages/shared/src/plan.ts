@@ -8,7 +8,10 @@ export type MealSlot = z.infer<typeof MealSlot>;
 export const PlanEntry = z.object({
   id: z.string().uuid(),
   plan_id: z.string().uuid(),
-  recipe_id: z.string().uuid(),
+  /** null = note meal without a recipe — title carries it (UX-audit P3). */
+  recipe_id: z.string().uuid().nullable().default(null),
+  /** free-text meal ("uit eten", "restjes"); required when recipe_id is null. */
+  title: z.string().nullable().default(null),
   /** null = the "Zonder datum · deze week nog inplannen" parking strip (spec §H3). */
   entry_date: z.string().date().nullable().default(null),
   meal_slot: MealSlot.default('dinner'),

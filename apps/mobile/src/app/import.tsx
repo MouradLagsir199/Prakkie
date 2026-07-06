@@ -149,10 +149,11 @@ export default function ImportSheet() {
             ))}
           </View>
 
+          {/* C4 — eerlijke tip: klembord-detectie is wat er nu écht werkt */}
           <View style={styles.tip}>
             <Text style={styles.tipText}>
-              Sneller: deel rechtstreeks vanuit Instagram of TikTok via{' '}
-              <Text style={{ fontFamily: fonts.bodyBold }}>Deel → Prakkie</Text>. Eén tik, klaar.
+              Sneller: <Text style={{ fontFamily: fonts.bodyBold }}>kopieer de link</Text> in Instagram of TikTok
+              en open Prakkie — we zien &apos;m meteen op je klembord.
             </Text>
           </View>
         </ScrollView>
