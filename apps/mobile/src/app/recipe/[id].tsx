@@ -5,7 +5,7 @@ import {
   CalendarPlus, ChefHat, ChevronLeft, ChevronRight, Clock, Minus, Plus, ShoppingCart, Trash2, X,
 } from 'lucide-react-native';
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ProductOptions, type ProductOption } from '../../components/prakkie/ProductOptions';
 import { deleteRow, getData, newId, syncNow, upsertRow } from '../../data';
@@ -13,6 +13,7 @@ import { addDays, isoWeekNumber, mondayOf, weekRangeLabel } from '../../data/cha
 import { activeHouseholdId } from '../../data/households';
 import { kv } from '../../data/kv';
 import { recipeImage, type RecipeRowData } from '../../data/recipes';
+import { confirmDialog, notice } from '../../lib/dialogs';
 import { colors, fonts, radius, type } from '../../theme/tokens';
 
 /**
@@ -136,7 +137,7 @@ export default function RecipeDetail() {
       setSheet('none');
       syncNow(['lists', 'list_items', 'match_corrections']).catch(() => {});
       const chosen = Object.keys(picks).length;
-      Alert.alert(
+      notice(
         'Op de lijst',
         `${scaled.length} ingrediënten voor ${Number(listDate.slice(8))}/${Number(listDate.slice(5, 7))} — ${chosen} product${chosen === 1 ? '' : 'en'} door jou gekozen.`
       );
@@ -164,22 +165,20 @@ export default function RecipeDetail() {
     });
     setSheet('none');
     syncNow(['plans', 'plan_entries']).catch(() => {});
-    Alert.alert('Ingepland', `${DAY_ABBREV_NL[planDay]} in week ${isoWeekNumber(weekStart)}.`);
+    notice('Ingepland', `${DAY_ABBREV_NL[planDay]} in week ${isoWeekNumber(weekStart)}.`);
   }
 
-  function removeRecipe() {
-    Alert.alert('Recept verwijderen?', recipe!.title, [
-      { text: 'Annuleren', style: 'cancel' },
-      {
-        text: 'Verwijderen',
-        style: 'destructive',
-        onPress: async () => {
-          await deleteRow('recipes', recipe!.id);
-          syncNow(['recipes']).catch(() => {});
-          router.back();
-        },
-      },
-    ]);
+  async function removeRecipe() {
+    const ok = await confirmDialog({
+      title: 'Recept verwijderen?',
+      message: recipe!.title,
+      confirmLabel: 'Verwijderen',
+      destructive: true,
+    });
+    if (!ok) return;
+    await deleteRow('recipes', recipe!.id);
+    syncNow(['recipes']).catch(() => {});
+    router.back();
   }
 
   const total = (recipe.time_prep_min ?? 0) + (recipe.time_cook_min ?? 0);

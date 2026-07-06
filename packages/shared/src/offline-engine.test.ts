@@ -130,12 +130,39 @@ class FakeServer implements SyncTransport {
   }
 }
 
+/** FakeServer whose push responses can be held open — models a slow network
+ *  while the user keeps tapping (the web "state doesn't stick" bug class). */
+class GatedServer extends FakeServer {
+  gate: Promise<void> | null = null;
+  override async push(mutations: SyncMutation[]) {
+    const result = await super.push(mutations); // request reached the server…
+    if (this.gate) await this.gate; // …but the response is still in flight
+    return result;
+  }
+}
+
 function setup() {
   const server = new FakeServer();
   const store = new MemoryStore();
   const engine = new OfflineEngine(store, server);
   return { server, store, engine };
 }
+
+function gatedSetup() {
+  const server = new GatedServer();
+  const store = new MemoryStore();
+  const engine = new OfflineEngine(store, server);
+  let open!: () => void;
+  server.gate = new Promise((r) => (open = r));
+  const release = () => {
+    open();
+    server.gate = null;
+  };
+  return { server, store, engine, release };
+}
+
+/** yield a macrotask so a just-started sync reaches its transport.push await */
+const inFlightTick = () => new Promise((r) => setTimeout(r, 0));
 
 describe('offline engine', () => {
   it('airplane-mode edit queues locally and syncs once online', async () => {
@@ -258,6 +285,62 @@ describe('offline engine', () => {
     expect(outcome.rejected[0]!.status).toBe('forbidden');
     expect(await store.getRow('recipes', id)).toBeNull();
     expect(await store.getPending()).toHaveLength(0);
+  });
+
+  it('an edit made while its row is mid-push is not lost or visually reverted', async () => {
+    const { server, store, engine, release } = gatedSetup();
+    const id = uid();
+    await engine.upsert('list_items', id, { name: 'roomboter', qty: 1 });
+
+    const sync = engine.sync(['list_items']);
+    await inFlightTick(); // batch is now awaiting the server response
+    await engine.upsert('list_items', id, { matches: { ah: 'sku-1' } }); // the product pick
+    release();
+    await sync;
+
+    // the pick survives the in-flight batch (old bug: removePending ate it and
+    // applyServerRow reverted the row to the server copy without the pick)
+    expect((await store.getRow('list_items', id))?.row.matches).toEqual({ ah: 'sku-1' });
+
+    await engine.sync(['list_items']); // re-push lands the merged fields
+    expect(server.tables.get('list_items')?.get(id)?.matches).toEqual({ ah: 'sku-1' });
+    expect(await store.getPending()).toHaveLength(0);
+  });
+
+  it('a delete during the insert push still reaches the server (no ghost revive)', async () => {
+    const { server, store, engine, release } = gatedSetup();
+    const id = uid();
+    await engine.upsert('lists', id, { name: 'Boodschappen 6 juli' });
+
+    const sync = engine.sync(['lists']);
+    await inFlightTick();
+    await engine.delete('lists', id); // user taps Verwijder while the insert is in flight
+    release();
+    await sync;
+
+    expect((await store.getRow('lists', id))?.deleted).toBe(true); // never revived
+
+    await engine.sync(['lists']); // queued delete tombstones the row the insert created
+    expect(server.tables.get('lists')?.get(id)?.deleted_at).not.toBeNull();
+    expect(await store.getPending()).toHaveLength(0);
+  });
+
+  it('concurrent sync calls serialise instead of double-pushing the queue', async () => {
+    const { server, store, engine } = setup();
+    let pushCalls = 0;
+    const original = server.push.bind(server);
+    server.push = async (mutations) => {
+      pushCalls++;
+      return original(mutations);
+    };
+
+    const id = uid();
+    await engine.upsert('recipes', id, { title: 'Dubbel', origin: 'manual' });
+    await Promise.all([engine.sync(['recipes']), engine.sync(['recipes'])]);
+
+    expect(pushCalls).toBe(1); // the second sync found an empty queue
+    expect(await store.getPending()).toHaveLength(0);
+    expect(server.tables.get('recipes')?.get(id)?.title).toBe('Dubbel');
   });
 
   it('uuidv7 ids are valid v7 and time-ordered', () => {

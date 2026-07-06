@@ -2,9 +2,10 @@ import * as Clipboard from 'expo-clipboard';
 import { useRouter } from 'expo-router';
 import { Camera, ClipboardPaste, Link2, PencilLine, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ImportError, importUrl, setPendingReview } from '../data/import-flow';
+import { notice } from '../lib/dialogs';
 import { colors, fonts, radius, type } from '../theme/tokens';
 
 /** Import sheet — mockup 03 1:1: clipboard card + green CTA, "of kies zelf",
@@ -45,7 +46,7 @@ export default function ImportSheet() {
 
   async function run(target: string) {
     if (!looksLikeUrl(target)) {
-      Alert.alert('Geen geldige link', 'Plak een volledige link (https://…).');
+      notice('Geen geldige link', 'Plak een volledige link (https://…).');
       return;
     }
     setBusy(true);
@@ -55,7 +56,7 @@ export default function ImportSheet() {
       router.replace('/review');
     } catch (err) {
       const msg = err instanceof ImportError ? err.message : 'Import mislukt. Probeer het opnieuw.';
-      Alert.alert('Import mislukt', msg);
+      notice('Import mislukt', msg);
     } finally {
       setBusy(false);
       setStatus('');
@@ -140,7 +141,7 @@ export default function ImportSheet() {
                       importId: '',
                     });
                     router.replace('/review');
-                  } else Alert.alert('Binnenkort', 'Foto/OCR en tekst plakken komen in een volgende update.');
+                  } else notice('Binnenkort', 'Foto/OCR en tekst plakken komen in een volgende update.');
                 }}
               >
                 <Icon size={19} strokeWidth={1.9} color={colors.primary} />

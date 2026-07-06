@@ -60,6 +60,10 @@ export class OfflineEngine {
   private transport: SyncTransport;
   /** notified after any local change so UI layers can re-query */
   private onChange?: (entity: SyncEntityName) => void;
+  /** seqs currently inside a transport.push round-trip */
+  private inFlight = new Set<number>();
+  /** serialises sync() calls — two interleaved pushes would double-send the queue */
+  private chain: Promise<unknown> = Promise.resolve();
 
   // plain field assignment (no TS parameter properties) keeps this runnable
   // under Node's strip-only TS mode (scripts/offline-smoke.mjs)
@@ -101,17 +105,33 @@ export class OfflineEngine {
   /** Local delete + queue; any queued upserts for the row are superseded. */
   async delete(entity: SyncEntityName, id: string): Promise<void> {
     const cached = await this.store.getRow(entity, id);
+    const queued = (await this.store.getPending()).filter((m) => m.entity === entity && m.id === id);
     await this.store.removePendingForId(entity, id);
-    // a row created offline and deleted offline never needs to reach the server
-    if (cached?.updatedAt != null) {
-      await this.store.addPending({ entity, op: 'delete', id, fields: {}, base_updated_at: cached.updatedAt });
+    // a row created offline and deleted offline never needs to reach the server —
+    // unless its insert is mid-push right now: the server is about to have it
+    if (cached?.updatedAt != null || queued.some((m) => this.inFlight.has(m.seq))) {
+      await this.store.addPending({ entity, op: 'delete', id, fields: {}, base_updated_at: cached?.updatedAt ?? null });
     }
     if (cached) await this.store.putRow(entity, { ...cached, deleted: true });
     this.onChange?.(entity);
   }
 
-  /** Push the queue, then pull per-entity deltas. Safe to call on any trigger. */
-  async sync(entities: readonly SyncEntityName[] = SYNC_ENTITY_NAMES): Promise<SyncOutcome> {
+  /** Push the queue, then pull per-entity deltas. Safe to call on any trigger;
+   *  concurrent calls serialise — two interleaved pushes would read the same
+   *  queue and double-send every mutation. */
+  sync(entities: readonly SyncEntityName[] = SYNC_ENTITY_NAMES): Promise<SyncOutcome> {
+    const run = this.chain.then(
+      () => this.runSync(entities),
+      () => this.runSync(entities)
+    );
+    this.chain = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  }
+
+  private async runSync(entities: readonly SyncEntityName[]): Promise<SyncOutcome> {
     const { pushed, rejected } = await this.push();
     const pulled = await this.pull(entities);
     return { pushed, pulled, rejected };
@@ -124,17 +144,40 @@ export class OfflineEngine {
       const pending = (await this.store.getPending()).slice(0, PUSH_BATCH);
       if (pending.length === 0) break;
 
-      const { results } = await this.transport.push(
-        pending.map(({ seq: _seq, ...mutation }) => mutation)
-      );
-      const bySeq = new Map(pending.map((m) => [`${m.entity}:${m.id}:${m.op}`, m.seq]));
+      // at most one queued mutation per (entity,id) — delete() clears upserts first
+      const sent = new Map(pending.map((m) => [`${m.entity}:${m.id}`, m]));
+      const sentFields = new Map(pending.map((m) => [m.seq, JSON.stringify(m.fields)]));
+      pending.forEach((m) => this.inFlight.add(m.seq));
+      let results: PushResult[];
+      try {
+        ({ results } = await this.transport.push(pending.map(({ seq: _seq, ...mutation }) => mutation)));
+      } finally {
+        pending.forEach((m) => this.inFlight.delete(m.seq));
+      }
+
+      // edits made while the batch was in flight supersede its results
+      const now = new Map((await this.store.getPending()).map((m) => [`${m.entity}:${m.id}`, m]));
       const done: number[] = [];
 
       for (const result of results) {
         const entity = result.entity as SyncEntityName;
-        const seq =
-          bySeq.get(`${result.entity}:${result.id}:upsert`) ?? bySeq.get(`${result.entity}:${result.id}:delete`);
-        if (seq !== undefined) done.push(seq);
+        const key = `${result.entity}:${result.id}`;
+        const sentM = sent.get(key);
+        if (!sentM) continue; // result for something this batch never sent
+        const cur = now.get(key);
+        if (
+          cur &&
+          (cur.seq !== sentM.seq || cur.op !== sentM.op || JSON.stringify(cur.fields) !== sentFields.get(sentM.seq))
+        ) {
+          // superseded mid-flight (coalesced edit, or a delete replacing the
+          // upsert): keep the newer mutation queued and do NOT overwrite the
+          // newer optimistic row with this already-stale server copy — but move
+          // the base forward so its re-push lands clean instead of self-conflicting
+          const base = result.row?.updated_at;
+          if (base != null) await this.store.updatePending(cur.seq, cur.fields, new Date(String(base)).toISOString());
+          continue;
+        }
+        done.push(sentM.seq);
 
         if (result.status === 'applied' || result.status === 'conflict_applied') {
           pushed++;
@@ -152,7 +195,8 @@ export class OfflineEngine {
         this.onChange?.(entity);
       }
       await this.store.removePending(done);
-      // results always cover every sent mutation; guard against a server bug looping us
+      // a superseded-only batch re-pushes on the next sync; a zero-progress
+      // round otherwise means a server bug — either way, don't loop hot
       if (done.length === 0) break;
     }
     return { pushed, rejected };

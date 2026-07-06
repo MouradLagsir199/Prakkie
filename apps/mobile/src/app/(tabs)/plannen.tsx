@@ -3,13 +3,14 @@ import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { ChevronLeft, ChevronRight, ListChecks, Plus, StickyNote, X } from 'lucide-react-native';
 import { useMemo, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { deleteRow, newId, syncNow, upsertRow, useEntityRows } from '../../data';
 import { authedRequest } from '../../data/api';
 import { addDays, isoWeekNumber, mondayOf, weekRangeLabel } from '../../data/chains';
 import { activeHouseholdId } from '../../data/households';
 import { recipeImage, type RecipeRowData } from '../../data/recipes';
+import { confirmDialog, notice } from '../../lib/dialogs';
 import { colors, fonts, radius, type } from '../../theme/tokens';
 
 /** Plannen — mockup 05 1:1: week switcher, day-chip rows, dashed empty slots,
@@ -147,7 +148,7 @@ export default function PlannenScreen() {
       await syncNow(['lists', 'list_items']);
       router.push('/boodschappen');
     } catch {
-      Alert.alert('Lijst maken mislukt', 'Controleer je verbinding en probeer opnieuw.');
+      notice('Lijst maken mislukt', 'Controleer je verbinding en probeer opnieuw.');
     } finally {
       setGenerating(false);
     }
@@ -163,18 +164,11 @@ export default function PlannenScreen() {
         key={entry.id}
         style={styles.entryCard}
         onPress={() => setMoveEntry(entry)}
-        onLongPress={() =>
-          Alert.alert('Van het menu halen?', label, [
-            { text: 'Annuleren', style: 'cancel' },
-            {
-              text: 'Verwijderen', style: 'destructive',
-              onPress: async () => {
-                await deleteRow('plan_entries', entry.id);
-                syncNow(['plan_entries']).catch(() => {});
-              },
-            },
-          ])
-        }
+        onLongPress={async () => {
+          if (!(await confirmDialog({ title: 'Van het menu halen?', message: label, confirmLabel: 'Verwijderen', destructive: true }))) return;
+          await deleteRow('plan_entries', entry.id);
+          syncNow(['plan_entries']).catch(() => {});
+        }}
       >
         {isNote ? (
           <View style={[styles.entryThumb, styles.noteThumb]}>
@@ -352,6 +346,19 @@ export default function PlannenScreen() {
               <Text style={type.chip}>Zonder datum</Text>
             </Pressable>
           </View>
+          {/* long-press is op web onvindbaar — verwijderen hoort ook via de gewone tap-sheet te kunnen */}
+          <Pressable
+            onPress={async () => {
+              const target = moveEntry;
+              setMoveEntry(null);
+              const label = (target.recipe_id ? recipeById.get(target.recipe_id)?.title : target.title) ?? 'Recept';
+              if (!(await confirmDialog({ title: 'Van het menu halen?', message: label, confirmLabel: 'Verwijderen', destructive: true }))) return;
+              await deleteRow('plan_entries', target.id);
+              syncNow(['plan_entries']).catch(() => {});
+            }}
+          >
+            <Text style={[type.body, { color: colors.danger, textAlign: 'center' }]}>Van het menu halen</Text>
+          </Pressable>
           <Pressable onPress={() => setMoveEntry(null)}>
             <Text style={[type.body, { color: colors.textMuted, textAlign: 'center' }]}>Annuleren</Text>
           </Pressable>

@@ -1,12 +1,13 @@
 import { CHAIN_IDS, CHAINS, LIVE_CHAIN_IDS, type ChainId } from '@prakkie/shared';
 import { Check, ChevronRight, Minus, Plus, X } from 'lucide-react-native';
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { syncNow } from '../../data';
 import { authedRequest, currentUser, login, register } from '../../data/api';
 import { invalidateHousehold, loadHousehold, type HouseholdInfo, type MemberInfo } from '../../data/households';
 import { kv } from '../../data/kv';
+import { confirmDialog, notice } from '../../lib/dialogs';
 import { colors, fonts, radius, type } from '../../theme/tokens';
 
 /**
@@ -106,9 +107,9 @@ export default function ProfielScreen() {
       if (!res.ok) throw new Error(String(res.status));
       setInviteEmail('');
       setSheet('none');
-      Alert.alert('Uitgenodigd', `${target} ziet de uitnodiging zodra die inlogt met dat e-mailadres.`);
+      notice('Uitgenodigd', `${target} ziet de uitnodiging zodra die inlogt met dat e-mailadres.`);
     } catch {
-      Alert.alert('Niet gelukt', 'Uitnodigen vereist internet.');
+      notice('Niet gelukt', 'Uitnodigen vereist internet.');
     } finally {
       setBusy(false);
     }
@@ -125,7 +126,7 @@ export default function ProfielScreen() {
       setSheet('invite'); // meteen door naar uitnodigen
       await refresh();
     } catch {
-      Alert.alert('Niet gelukt', 'Huishouden maken vereist internet.');
+      notice('Niet gelukt', 'Huishouden maken vereist internet.');
     } finally {
       setBusy(false);
     }
@@ -138,16 +139,16 @@ export default function ProfielScreen() {
       invalidateHousehold();
       await refresh();
       syncNow().catch(() => {});
-      Alert.alert('Welkom!', `Je zit nu in “${inv.household_name}” — boodschappen worden gedeeld.`);
+      notice('Welkom!', `Je zit nu in “${inv.household_name}” — boodschappen worden gedeeld.`);
     } catch {
-      Alert.alert('Niet gelukt', 'Accepteren vereist internet.');
+      notice('Niet gelukt', 'Accepteren vereist internet.');
     }
   }
 
   async function submitAccount(mode: 'register' | 'login') {
     const em = accEmail.trim().toLowerCase();
     if (!em || accPassword.length < 8) {
-      Alert.alert('Check je invoer', 'E-mail + wachtwoord van minimaal 8 tekens.');
+      notice('Check je invoer', 'E-mail + wachtwoord van minimaal 8 tekens.');
       return;
     }
     setBusy(true);
@@ -159,9 +160,9 @@ export default function ProfielScreen() {
       invalidateHousehold();
       await refresh();
       syncNow().catch(() => {});
-      Alert.alert('Gelukt', `Je bent ingelogd als ${em}.`);
+      notice('Gelukt', `Je bent ingelogd als ${em}.`);
     } catch (e) {
-      Alert.alert('Niet gelukt', e instanceof Error ? e.message : 'Probeer het opnieuw.');
+      notice('Niet gelukt', e instanceof Error ? e.message : 'Probeer het opnieuw.');
     } finally {
       setBusy(false);
     }
@@ -210,12 +211,14 @@ export default function ProfielScreen() {
             ))}
             <Pressable
               style={[styles.memberChip, styles.memberAdd]}
-              onPress={() => {
+              onPress={async () => {
                 if (!email) {
-                  Alert.alert('Eerst een account', 'Huishoudens werken via e-mail — koppel eerst je e-mailadres.', [
-                    { text: 'Later', style: 'cancel' },
-                    { text: 'Account koppelen', onPress: () => setSheet('account') },
-                  ]);
+                  const link = await confirmDialog({
+                    title: 'Eerst een account',
+                    message: 'Huishoudens werken via e-mail — koppel eerst je e-mailadres.',
+                    confirmLabel: 'Account koppelen',
+                  });
+                  if (link) setSheet('account');
                 } else setSheet(household ? 'invite' : 'household');
               }}
             >
@@ -263,13 +266,13 @@ export default function ProfielScreen() {
               <Text style={styles.settingValue}>Nederlands</Text>
               <ChevronRight size={15} color={colors.textMuted} />
             </>
-          ), () => Alert.alert('Binnenkort', 'Meer talen volgen.'))}
+          ), () => notice('Binnenkort', 'Meer talen volgen.'))}
           {row('Eenheden', (
             <>
               <Text style={styles.settingValue}>Metrisch</Text>
               <ChevronRight size={15} color={colors.textMuted} />
             </>
-          ), () => Alert.alert('Binnenkort', 'Imperial volgt.'))}
+          ), () => notice('Binnenkort', 'Imperial volgt.'))}
           {row(
             'Standaard porties',
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -301,7 +304,7 @@ export default function ProfielScreen() {
         {/* premium-teaser — betalingen zijn bewust uitgeschakeld */}
         <Pressable
           style={styles.premiumCard}
-          onPress={() => Alert.alert('Premium komt later', 'Alles is nu gratis tijdens de testfase.')}
+          onPress={() => notice('Premium komt later', 'Alles is nu gratis tijdens de testfase.')}
         >
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
             <Text style={styles.premiumTitle}>Prakkie Premium</Text>
@@ -322,10 +325,10 @@ export default function ProfielScreen() {
         </Pressable>
 
         <View style={styles.gdprRow}>
-          <Pressable onPress={() => Alert.alert('Binnenkort', 'Data-export komt vóór de store-release.')}>
+          <Pressable onPress={() => notice('Binnenkort', 'Data-export komt vóór de store-release.')}>
             <Text style={styles.gdprExport}>Exporteer mijn data</Text>
           </Pressable>
-          <Pressable onPress={() => Alert.alert('Binnenkort', 'Account verwijderen komt vóór de store-release.')}>
+          <Pressable onPress={() => notice('Binnenkort', 'Account verwijderen komt vóór de store-release.')}>
             <Text style={styles.gdprDelete}>Verwijder account</Text>
           </Pressable>
         </View>

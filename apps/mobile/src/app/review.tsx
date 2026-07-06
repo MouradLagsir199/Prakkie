@@ -2,11 +2,12 @@ import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { Check, ChevronDown, ChevronUp, Plus, Trash2 } from 'lucide-react-native';
 import { useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { newId, syncNow, upsertRow } from '../data';
 import { takePendingReview } from '../data/import-flow';
 import type { RecipeRowData } from '../data/recipes';
+import { notice } from '../lib/dialogs';
 import { colors, fonts, radius, type } from '../theme/tokens';
 
 /**
@@ -70,14 +71,14 @@ export default function ReviewScreen() {
 
   async function save() {
     if (!title.trim()) {
-      Alert.alert('Titel ontbreekt', 'Geef het recept een naam.');
+      notice('Titel ontbreekt', 'Geef het recept een naam.');
       return;
     }
     // drop rows the user left empty; a recipe needs at least one real ingredient
     const cleanIngredients = ingredients.filter((i) => (i.raw_text ?? i.item_normalised ?? '').trim());
     const cleanSteps = steps.filter((s) => s.text.trim()).map((s, j) => ({ ...s, order: j + 1 }));
     if (cleanIngredients.length === 0) {
-      Alert.alert('Nog geen ingrediënten', 'Voeg minstens één ingrediënt toe.');
+      notice('Nog geen ingrediënten', 'Voeg minstens één ingrediënt toe.');
       return;
     }
     const id = r.id && r.id.length === 36 ? r.id : newId();

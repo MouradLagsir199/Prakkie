@@ -3,7 +3,7 @@ import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { Archive, Check, ChevronDown } from 'lucide-react-native';
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChipRow } from '../../components/prakkie/ChipRow';
 import { RecipeCard } from '../../components/prakkie/RecipeCard';
@@ -14,6 +14,7 @@ import { authedRequest, currentUser } from '../../data/api';
 import { setPendingReview } from '../../data/import-flow';
 import { RECIPE_SORTS, recipeImage, sortRecipes, toCard, type RecipeRowData, type RecipeSort } from '../../data/recipes';
 import type { FixtureRecipe } from '../../fixtures/recipes';
+import { notice } from '../../lib/dialogs';
 import { colors, fonts, radius, type } from '../../theme/tokens';
 
 interface DiscoverItem {
@@ -71,7 +72,7 @@ export default function ReceptenScreen() {
       setPendingReview({ recipe: body.recipe, warnings: [], importId: '' });
       router.push('/review');
     } catch {
-      Alert.alert('Even geen verbinding', 'Ontdek-recepten openen vereist internet.');
+      notice('Even geen verbinding', 'Ontdek-recepten openen vereist internet.');
     }
   }
 

@@ -1,7 +1,7 @@
 import { AISLE_GROUPS, formatEuroCents, OVERIG_GROUP_ID } from '@prakkie/shared';
 import { Check, ChevronLeft, ChevronRight, Minus, Plus, Trash2, X } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ProductOptions } from '../../components/prakkie/ProductOptions';
 import { deleteRow, newId, syncNow, upsertRow, useEntityRows } from '../../data';
@@ -9,6 +9,7 @@ import { authedRequest } from '../../data/api';
 import { CHAIN_BRAND, chainChip, chainName } from '../../data/chains';
 import { activeHouseholdId, loadHousehold, memberName, type MemberInfo } from '../../data/households';
 import { kv } from '../../data/kv';
+import { confirmDialog } from '../../lib/dialogs';
 import { colors, fonts, radius, type } from '../../theme/tokens';
 
 /**
@@ -244,24 +245,22 @@ export default function BoodschappenScreen() {
   }
 
   /** hele lijst weg — met bevestiging; items gaan mee. */
-  function removeList(target: ListRow) {
-    Alert.alert('Lijst verwijderen?', `“${target.name}” en alle items verdwijnen — ook voor je huishouden.`, [
-      { text: 'Annuleren', style: 'cancel' },
-      {
-        text: 'Verwijderen',
-        style: 'destructive',
-        onPress: async () => {
-          const children = itemRows
-            .map((r) => ({ id: r.id, row: r.row as unknown as ItemRow }))
-            .filter((r) => r.row.list_id === target.id);
-          for (const c of children) await deleteRow('list_items', c.id);
-          await deleteRow('lists', target.id);
-          setActiveListId(null);
-          setPricing(null);
-          syncNow(['lists', 'list_items']).catch(() => {});
-        },
-      },
-    ]);
+  async function removeList(target: ListRow) {
+    const ok = await confirmDialog({
+      title: 'Lijst verwijderen?',
+      message: `“${target.name}” en alle items verdwijnen — ook voor je huishouden.`,
+      confirmLabel: 'Verwijderen',
+      destructive: true,
+    });
+    if (!ok) return;
+    const children = itemRows
+      .map((r) => ({ id: r.id, row: r.row as unknown as ItemRow }))
+      .filter((r) => r.row.list_id === target.id);
+    for (const c of children) await deleteRow('list_items', c.id);
+    await deleteRow('lists', target.id);
+    setActiveListId(null);
+    setPricing(null);
+    syncNow(['lists', 'list_items']).catch(() => {});
   }
 
   /** item hernoemen: user-tekst wint, normalisatie + schap worden opnieuw afgeleid. */

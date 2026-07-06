@@ -173,6 +173,13 @@
 - [x] Instellingen-scherm (avatar op Recepten): naam, live ketens, personen, huishouden maken/uitnodigen/joinen (`GET /v1/households` toegevoegd)
 - [x] Onboarding: alleen 6 live ketens kiesbaar, rest "binnenkort" (`LIVE_CHAIN_IDS` in shared)
 - [x] Receptdetail terugknop; kookmodus stempelt `last_cooked_at` (sort "laatst gekookt" werkt)
+
+## Statefulness-debug (2026-07-07) — "niets blijft staan" op web: 3 samenspelende oorzaken
+
+- [x] **Replica-identiteitsguard**: 401-zelfheling muntte een nieuwe gast maar liet de lokale replica van de dode identiteit staan → elke push op ghost-parents (plans/lists van de oude gast) werd door de server geweigerd en de engine rolde de optimistische rij terug ("recept verdwijnt uit weekplanner", "keuze niet zichtbaar"). Nu: `prakkie.replica_owner`-marker; wijkt de sessie-gebruiker af → store + cursors + queue + household-cache wissen en volledig terug-pullen (reinstall-garantie). `onIdentityChange` event vanuit api.ts.
+- [x] **Sessie-races (single-flight)**: refresh-token roteert bij gebruik; parallelle 401's lieten de verliezer "sessie dood" concluderen en een gezonde sessie wipen (= stille identiteitsreset, elke ~15 min risico). ensureSession én 401-recovery zijn nu single-flight; e-mailaccounts worden nooit stil gewist.
+- [x] **Engine-races** (offline-engine, 12/12 vitest + live smoke): (a) edit tijdens in-flight push werd door removePending opgegeten en visueel teruggedraaid → supersede-detectie: nieuwere mutatie blijft in de queue, server-copy overschrijft de nieuwere optimistische rij niet, base schuift mee; (b) delete tijdens in-flight insert liet de server-rij wees achter (revive) → delete queue't nu ook bij in-flight insert; (c) concurrente sync()-calls dubbel-pushten de queue → geserialiseerd.
+- [x] **Alert.alert = stille no-op op react-native-web**: "Lijst verwijderen?"-bevestiging deed op web letterlijk niets. Nieuwe `lib/dialogs.ts` (confirmDialog/notice, web → window.confirm/alert) vervangt álle Alerts (7 schermen). Plannen-sheet kreeg "Van het menu halen" (long-press is op web onvindbaar).
 - [x] Prijzen: dode "Koken met aanbiedingen"-rail → conditioneel + echt (recepten × deals), lege staat met CTA
 - [x] Ontdek: laden ≠ geen-resultaat ≠ offline; 0-hits toont import-CTA
 - [x] Matcher: morfologische aliassen in zoektermen + `lexicon_products` rank-1 hints geseed (`scripts/seed-lexicon-hints.mjs`) — "ui"→uien i.p.v. "Gehakt met ui"

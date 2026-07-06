@@ -56,6 +56,12 @@ export function invalidateHousehold(): void {
   memory = null;
 }
 
+/** Identity switch: the cached household belongs to the previous account. */
+export async function resetHouseholdCache(): Promise<void> {
+  memory = null;
+  await kv.setItem(KV_KEY, '').catch(() => {});
+}
+
 /** household_id to stamp on newly created lists — shared with the whole house. */
 export async function activeHouseholdId(): Promise<string | null> {
   return (await loadHousehold()).household?.id ?? null;

@@ -7,8 +7,10 @@ import {
 } from '@prakkie/shared';
 import { getRandomValues } from 'expo-crypto';
 import { useEffect, useState } from 'react';
-import { ensureSession, httpTransport } from './api';
+import { ensureSession, httpTransport, onIdentityChange } from './api';
 import { SqliteStore } from './database';
+import { resetHouseholdCache } from './households';
+import { kv } from './kv';
 
 /**
  * Data layer entry point (WS1): local-first reads, queued writes, sync on
@@ -56,9 +58,33 @@ export async function listRows(entity: SyncEntityName): Promise<CachedRow[]> {
   return (await store.listRows(entity)).filter((r) => !r.deleted);
 }
 
+/** The replica (rows, cursors, queue) is valid for exactly one account. After
+ *  an identity switch — login as someone else, or a dead guest session that got
+ *  re-minted — ghost rows from the old account would poison every push (the
+ *  server rejects children of parents it never gave this user), which the
+ *  engine then correctly rolls back: "alles wat ik doe verdwijnt weer". So:
+ *  wipe and re-pull. An empty store pulling from epoch reproduces the full
+ *  account — the WS1 reinstall guarantee. */
+const REPLICA_OWNER = 'prakkie.replica_owner';
+
+async function ensureReplicaOwner(userId: string): Promise<void> {
+  const owner = await kv.getItem(REPLICA_OWNER).catch(() => null);
+  if (owner === userId) return;
+  const { store } = await getData();
+  await store.clear();
+  await kv.setItem(REPLICA_OWNER, userId).catch(() => {});
+  await resetHouseholdCache();
+  for (const entity of listeners.keys()) notify(entity);
+}
+
+onIdentityChange((user) => {
+  ensureReplicaOwner(user.id).catch(() => {});
+});
+
 /** Ensure a session exists, push the queue, pull deltas. Call on foreground/reconnect. */
 export async function syncNow(entities?: readonly SyncEntityName[]): Promise<SyncOutcome> {
-  await ensureSession();
+  const user = await ensureSession();
+  await ensureReplicaOwner(user.id);
   const { engine } = await getData();
   return engine.sync(entities);
 }
