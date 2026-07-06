@@ -13,7 +13,7 @@ import { colors, icons, radius, shadows, type } from '../../theme/tokens';
 const TAB_META: Record<string, { label: string; Icon: typeof BookOpen }> = {
   index: { label: 'Recepten', Icon: BookOpen },
   plannen: { label: 'Plannen', Icon: Calendar },
-  boodschappen: { label: 'Boodschap.', Icon: ShoppingCart },
+  boodschappen: { label: 'Boodschappen', Icon: ShoppingCart },
   profiel: { label: 'Profiel', Icon: UserRound },
 };
 
@@ -50,7 +50,16 @@ export function FloatingTabBar({ state, navigation }: TabBarProps) {
         style={styles.tab}
       >
         <Icon size={icons.tabSize} strokeWidth={icons.strokeWidth} color={color} />
-        <Text style={[focused ? type.tabLabelActive : type.tabLabelInactive, styles.tabLabel]}>{meta.label}</Text>
+        <Text
+          numberOfLines={1}
+          style={[
+            focused ? type.tabLabelActive : type.tabLabelInactive,
+            styles.tabLabel,
+            meta.label.length > 9 && styles.tabLabelLong, // "Boodschappen" past dan net
+          ]}
+        >
+          {meta.label}
+        </Text>
       </Pressable>
     );
   };
@@ -101,6 +110,10 @@ const styles = StyleSheet.create({
   },
   tabLabel: {
     textAlign: 'center',
+  },
+  tabLabelLong: {
+    fontSize: 8.5,
+    letterSpacing: -0.2,
   },
   fab: {
     width: 56,

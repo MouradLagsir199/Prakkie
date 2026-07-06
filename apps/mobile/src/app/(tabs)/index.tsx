@@ -40,6 +40,7 @@ export default function ReceptenScreen() {
   }, []);
 
   const [discoverState, setDiscoverState] = useState<'idle' | 'loading' | 'done' | 'offline'>('idle');
+  const [discoverError, setDiscoverError] = useState('');
   useEffect(() => {
     if (segment !== 'ontdek') return;
     setDiscoverState('loading');
@@ -49,9 +50,14 @@ export default function ReceptenScreen() {
         if (res.ok) {
           setDiscover(((await res.json()) as { items: DiscoverItem[] }).items);
           setDiscoverState('done');
-        } else setDiscoverState('offline');
-      } catch {
-        setDiscoverState('offline'); // Ontdek is online-only
+        } else {
+          setDiscoverError(`HTTP ${res.status}`);
+          setDiscoverState('offline');
+        }
+      } catch (e) {
+        // Ontdek is online-only — toon de échte reden i.p.v. te gokken
+        setDiscoverError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
+        setDiscoverState('offline');
       }
     }, query ? 350 : 0);
     return () => clearTimeout(t);
@@ -275,6 +281,11 @@ export default function ReceptenScreen() {
                       ? `Niets gevonden voor “${query.trim()}” — Ontdek groeit elke nacht.`
                       : 'Nog niets in Ontdek — kijk later nog eens.'}
               </Text>
+              {discoverState === 'offline' && discoverError ? (
+                <Text style={[type.meta, { fontSize: 10.5, color: '#B9836B', textAlign: 'center' }]}>
+                  technisch detail: {discoverError}
+                </Text>
+              ) : null}
               {discoverState === 'done' && query.trim() ? (
                 <Pressable onPress={() => router.push('/import')}>
                   <Text style={[type.body, { color: colors.primary, fontFamily: fonts.bodySemiBold }]}>
