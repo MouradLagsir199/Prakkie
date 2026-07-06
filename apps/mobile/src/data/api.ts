@@ -116,7 +116,7 @@ async function refreshSession(): Promise<boolean> {
   return true;
 }
 
-/** Bearer request with one silent refresh-and-retry on 401. */
+/** Bearer request with silent refresh-and-retry on 401 — and guest self-heal. */
 export async function authedRequest(path: string, init: RequestInit = {}): Promise<Response> {
   // web skips onboarding (the usual ensureSession caller) — bootstrap the
   // guest session here so the first request isn't a dead "Bearer null" 401
@@ -127,7 +127,25 @@ export async function authedRequest(path: string, init: RequestInit = {}): Promi
       headers: { ...(init.headers ?? {}), authorization: `Bearer ${await SecureStore.getItemAsync(KEYS.access)}` },
     });
   let res = await attempt();
-  if (res.status === 401 && (await refreshSession())) res = await attempt();
+  if (res.status === 401) {
+    let recovered = await refreshSession();
+    if (!recovered) {
+      // refresh-token dood (geroteerd/verlopen). Een gast-identiteit is dan
+      // cryptografisch onbereikbaar — weggooien en vers beginnen is de enige
+      // route (fixt de "eeuwige 401" web-sessie). E-mailaccounts wissen we
+      // nooit stilletjes: daar hoort opnieuw inloggen via Profiel.
+      const user = await currentUser().catch(() => null);
+      if (!user || user.is_guest) {
+        await SecureStore.deleteItemAsync(KEYS.access);
+        await SecureStore.deleteItemAsync(KEYS.refresh);
+        await SecureStore.deleteItemAsync(KEYS.user);
+        recovered = await ensureSession()
+          .then(() => true)
+          .catch(() => false);
+      }
+    }
+    if (recovered) res = await attempt();
+  }
   return res;
 }
 
