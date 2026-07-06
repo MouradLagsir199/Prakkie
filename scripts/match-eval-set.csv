@@ -90,3 +90,6 @@ doperwten,doperwten,
 bladerdeeg,bladerdeeg,
 witte wijn,witte wijn,\b(azijn|saus)\b
 kookroom,kookroom,
+sperziebonen,sperziebonen|haricots verts,\b(blik|gebroken|salade|schotel|maaltijd)\b
+bietjes,\bbiet(en|jes)?\b,\b(salade|chips|sap)\b
+mais,mais,\b(chips|wafel|brood)\b

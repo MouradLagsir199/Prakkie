@@ -66,7 +66,14 @@ export async function resolveLexicon(
 }
 
 // composite/processed product words: penalised when absent from the query itself
-const PROCESSED_RX = '\\m(saus|soep|salade|mix|kruidenmix|poeder|drink|snack|chips|koek|smaak|geur|shampoo|spray|kattenvoer|hondenvoer)\\M';
+const PROCESSED_RX = '\\m(saus|soep|salade|mix|kruidenmix|poeder|drink|snack|chips|koek|smaak|geur|shampoo|spray|kattenvoer|hondenvoer|schotel|dagschotel|maaltijd)\\M';
+
+// form words (conserven/bewerkingen): who "sperziebonen" zoekt wil vrijwel nooit
+// "in blik gebroken". Alleen toegepast op vers-producten (aisle-groep 1) — bij
+// kikkererwten/doperwten is blik/pot juist dé normale vorm. Bewust NIET in de
+// lijst: diepvries, gesneden, gewassen, geraspt, gekookt (gekookte bietjes is
+// de normale vorm), gezouten. Query "sperziebonen blik" krijgt géén penalty.
+const FORM_RX = '\\m(blik|blikje|blikjes|pot|potje|gebroken|gedroogd|gedroogde|ingelegd|ingelegde|zoetzuur|zoetzure|tafelzuur)\\M';
 
 const CANDIDATE_SQL = `
 WITH terms AS (SELECT DISTINCT unnest($1::text[]) AS q),
@@ -99,7 +106,9 @@ fuzzy AS (
                        AND public.fold_text(nc.display_name) ~ ('\\m' || t.q || '\\M') THEN 0.15
                   ELSE 0 END
            - CASE WHEN public.fold_text(p.name) ~ '${PROCESSED_RX}'
-                       AND NOT t.q ~ '${PROCESSED_RX}' THEN 0.22 ELSE 0 END AS score
+                       AND NOT t.q ~ '${PROCESSED_RX}' THEN 0.22 ELSE 0 END
+           - CASE WHEN $7::boolean AND public.fold_text(p.name) ~ '${FORM_RX}'
+                       AND NOT t.q ~ '${FORM_RX}' THEN 0.22 ELSE 0 END AS score
     FROM catalog.products p
     CROSS JOIN terms t
     LEFT JOIN catalog.name_canonical nc
@@ -143,14 +152,15 @@ export async function matchItem(
   client?: Queryable
 ): Promise<Record<string, ChainMatch>> {
   const q = client ?? { query };
-  const { term, aliases } = await resolveLexicon(item, client);
+  const { term, aliases, aisleGroupId } = await resolveLexicon(item, client);
   // Dutch morphological aliases (plural/diminutive: uien, aardappelen) join the
   // search — "aardappel" alone loses the whole-word boost against products named
   // "…aardappelen", letting dish names win. Translations ("onion") stay out:
   // they'd surface "AH Onion rings" for "ui". (UX-audit matching pass)
   const morphAliases = aliases.filter((a) => a.includes(term) || term.includes(a));
   const searchTerms = [...new Set([item, term, ...morphAliases])].slice(0, 6);
-  const r = await q.query(CANDIDATE_SQL, [searchTerms, chainIds, SHORTLIST_SIZE, userId, [item], aliases]);
+  const freshProduce = aisleGroupId === 1; // groente & fruit → FORM_RX-penalty aan
+  const r = await q.query(CANDIDATE_SQL, [searchTerms, chainIds, SHORTLIST_SIZE, userId, [item], aliases, freshProduce]);
 
   const byChain: Record<string, MatchCandidate[]> = {};
   for (const row of r.rows as (MatchCandidate & { confidence: string | number })[]) {

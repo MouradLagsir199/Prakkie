@@ -35,6 +35,10 @@ const DISH_WORDS = [
   'hagel', 'vulling', 'beleg', 'geur', 'smaak', 'shampoo', 'kattenvoer', 'hondenvoer',
   'gevuld', 'gevulde', 'gebraden', 'gepaneerd', 'gemarineerd', 'zoetzuur', 'zoetzure',
   'zoet', 'zoete', 'aioli', 'hummus', 'tapenade', 'pesto', 'spread', 'dressing', 'basis',
+  // vorm-woorden (owner 2026-07-07): "sperziebonen in blik gebroken" mag nooit
+  // dé rank-1-hint worden. Bewust niet 'pot'/'zoetzuur-alleen': augurken e.d.
+  // houden hun hint via de bestaande "item is zelf zo'n woord"-escape.
+  'blik', 'blikje', 'blikjes', 'gebroken', 'gedroogd', 'gedroogde', 'ingelegd', 'ingelegde',
 ];
 const STORE_BRANDS =
   '(ah|ah biologisch|jumbo|jumbo biologisch|plus|spar|aldi|dirk|1 de beste|g woon|gwoon|markant|boni|perfekt|elvee|nature|bio\\+|bio)';

@@ -22,6 +22,8 @@ export interface ProductOption {
   promo_price_cents?: number | null;
   image_url?: string | null;
   confidence?: number;
+  /** herkomst van de match: eigen correctie > lexicon-hint > fuzzy */
+  source?: 'correction' | 'lexicon' | 'trgm';
   /** inhoud/gewicht — 300 g sandwichspread is geen 450 g */
   pack_size_value?: number | null;
   pack_size_unit?: string | null;
@@ -62,7 +64,27 @@ export interface CrossChainOption extends ProductOption {
   chain: string;
   /** relevantie-rang binnen de eigen keten-shortlist (0 = beste match) */
   rank: number;
+  /** 1 = beste matches, 2 = "meer opties" onder de divider */
+  band: 1 | 2;
 }
+
+// Bandregel (owner 2026-07-07, "sperziebonen ≠ blik gebroken"): band 1 =
+// correctie/lexicon-hint (confidence 1.0 / 0.95) óf een top-3 fuzzy match
+// binnen de eigen keten mét een minimale zekerheid ÉN dicht bij de topscore
+// van die keten. Die laatste eis vangt schrale ketens: bij Aldi is "Gebroken
+// sperziebonen" (0.68, penalty gehad) alsnog rang 2 omdat er weinig aanbod is
+// — het gat met de top (0.90) verraadt dat het een mindere match is.
+const BAND1_PER_CHAIN = 3;
+const BAND1_MIN_CONF = 0.55; // trgm ≤ 0.9, lexicon 0.95, correctie 1.0
+const BAND1_MAX_GAP = 0.15; // t.o.v. de beste match binnen dezelfde keten
+const bandOf = (
+  o: { source?: string; rank: number; confidence?: number },
+  chainTopConf: number
+): 1 | 2 =>
+  o.source !== 'trgm' ||
+  (o.rank < BAND1_PER_CHAIN && (o.confidence ?? 0) >= BAND1_MIN_CONF && (o.confidence ?? 0) >= chainTopConf - BAND1_MAX_GAP)
+    ? 1
+    : 2;
 
 export function useCrossChainOptions(term: string | null, chains: readonly string[]) {
   const [options, setOptions] = useState<CrossChainOption[] | null>(null);
@@ -78,14 +100,22 @@ export function useCrossChainOptions(term: string | null, chains: readonly strin
       .then(async (res) => {
         if (!res.ok) throw new Error(String(res.status));
         const body = (await res.json()) as { matches: Record<string, { shortlist: ProductOption[] }> };
-        const merged = chainKey
-          .split(',')
-          .flatMap((c) => (body.matches[c]?.shortlist ?? []).map((o, rank) => ({ ...o, chain: c, rank })));
-        // owner 2026-07-07: puur op prijs, laag → hoog; relevantie-rang alleen
-        // als tiebreak. Inhoud + eenheidsprijs per rij houden het eerlijk.
+        const merged = chainKey.split(',').flatMap((c) => {
+          const shortlist = body.matches[c]?.shortlist ?? [];
+          const chainTopConf = Math.max(0, ...shortlist.map((o) => o.confidence ?? 0));
+          return shortlist.map((o, rank) => {
+            const tagged = { ...o, chain: c, rank } as CrossChainOption;
+            tagged.band = bandOf(tagged, chainTopConf);
+            return tagged;
+          });
+        });
+        // owner 2026-07-07 (2e iteratie): twee banden — beste matches boven,
+        // "meer opties" onder de divider; bínnen elke band puur prijs laag → hoog.
         merged.sort(
           (a, b) =>
-            (a.promo_price_cents ?? a.price_cents) - (b.promo_price_cents ?? b.price_cents) || a.rank - b.rank
+            a.band - b.band ||
+            (a.promo_price_cents ?? a.price_cents) - (b.promo_price_cents ?? b.price_cents) ||
+            a.rank - b.rank
         );
         if (live) setOptions(merged);
       })
@@ -144,6 +174,35 @@ export function CrossChainRow({
   );
 }
 
+/** De gedeelde resultatenlijst: band-1-rijen, subtiel "MEER OPTIES"-kopje,
+ *  band-2-rijen. Zonder twee zichtbare banden: exact de platte lijst. Eén
+ *  component voor zoekpaneel én item-sheet, zodat ze nooit uiteenlopen. */
+export function CrossChainList({
+  options,
+  maxRows = 30,
+  currentSku,
+  onPick,
+}: {
+  options: CrossChainOption[];
+  maxRows?: number;
+  currentSku?: string | null;
+  onPick: (option: CrossChainOption) => void;
+}) {
+  const visible = options.slice(0, maxRows);
+  const dividerAt = visible.findIndex((o) => o.band === 2);
+  const showDivider = dividerAt > 0; // beide banden zichtbaar → kopje ertussen
+  return (
+    <View>
+      {visible.map((o, i) => (
+        <View key={`${o.chain}:${o.sku_id}`}>
+          {showDivider && i === dividerAt ? <Text style={styles.bandDivider}>MEER OPTIES</Text> : null}
+          <CrossChainRow option={o} chosen={o.sku_id === currentSku} onPick={onPick} />
+        </View>
+      ))}
+    </View>
+  );
+}
+
 /** Zoek + kies over alle geselecteerde supers — voor de item-sheet. */
 export function CrossChainOptions({
   term,
@@ -185,11 +244,7 @@ export function CrossChainOptions({
       ) : options.length === 0 ? (
         <Text style={[type.meta, styles.state]}>Geen producten gevonden — probeer een ander woord.</Text>
       ) : (
-        options
-          .slice(0, maxRows)
-          .map((o) => (
-            <CrossChainRow key={`${o.chain}:${o.sku_id}`} option={o} chosen={o.sku_id === currentSku} onPick={onPick} />
-          ))
+        <CrossChainList options={options} maxRows={maxRows} currentSku={currentSku} onPick={onPick} />
       )}
     </View>
   );
@@ -327,6 +382,10 @@ const styles = StyleSheet.create({
   brand: { fontSize: 10.5, color: '#97A08F' },
   chainBadge: { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
   chainBadgeText: { fontSize: 8, fontFamily: fonts.bodyBold },
+  bandDivider: {
+    fontSize: 9.5, fontFamily: fonts.bodyBold, letterSpacing: 0.7, color: '#97A08F',
+    marginTop: 8, marginBottom: 3, paddingHorizontal: 6,
+  },
   price: { fontSize: 13, fontFamily: fonts.bodySemiBold, color: colors.text },
   oldPrice: { fontSize: 10.5, color: '#B9C0B2', textDecorationLine: 'line-through' },
 });

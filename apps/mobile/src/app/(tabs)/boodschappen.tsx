@@ -4,8 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
+  CrossChainList,
   CrossChainOptions,
-  CrossChainRow,
   useCrossChainOptions,
   type CrossChainOption,
 } from '../../components/prakkie/ProductOptions';
@@ -541,9 +541,7 @@ export default function BoodschappenScreen() {
                 Geen producten gevonden bij {myChains.map(chainName).join(', ')}.
               </Text>
             ) : (
-              searchOptions.slice(0, 30).map((o) => (
-                <CrossChainRow key={`${o.chain}:${o.sku_id}`} option={o} onPick={(opt) => addFromSearch(opt)} />
-              ))
+              <CrossChainList options={searchOptions} maxRows={30} onPick={(opt) => addFromSearch(opt)} />
             )}
           </View>
         ) : null}
@@ -759,7 +757,7 @@ export default function BoodschappenScreen() {
             </Pressable>
           </View>
 
-          <Text style={styles.sheetSection}>KIES JOUW PRODUCT — GOEDKOOPSTE EERST</Text>
+          <Text style={styles.sheetSection}>KIES JOUW PRODUCT — BESTE MATCHES EERST</Text>
           <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
             <CrossChainOptions
               term={detailItem.item_normalised ?? detailItem.name}

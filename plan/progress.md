@@ -197,6 +197,13 @@
 - [x] Gekozen product → producttitel wordt de itemnaam (zoek-add én pin); verrijking overschrijft de titel niet meer; subline "· door jou gekozen" zonder duplicatie
 - [x] "Alles bij X" grijs + zonder totaal wanneer de lijst daar niet compleet kan (regel betrouwbaar = gepind óf confidence ≥ 0.45); voordeligste-marker alleen op complete ketens; besparing t.o.v. beste complete keten
 - [x] Inhoud/gewicht per rij: "300 g · €3,30/kg" — pack-size zit niet in de catalogus maar wordt exact afgeleid uit prijs ÷ eenheidsprijs (live geverifieerd op sandwichspread)
+
+### v2.2 — "meest waarschijnlijk eerst" (banded ranking, owner-vraag sperziebonen)
+
+- [x] Twee banden in de productzoeker: beste matches boven (goedkoopste eerst dáárbinnen), kopje "MEER OPTIES", rest ook op prijs. Bandregel client-side: source ≠ trgm (correctie/lexicon) óf top-3 per keten mét confidence ≥ 0.55 — per-keten-RANG i.p.v. vaste drempel (coverage-term maakt lange verse namen anders verliezers van korte blik-namen). Gedeelde `CrossChainList` voor zoekpaneel + item-sheet.
+- [x] Server FORM_RX-penalty (−0.22): blik/pot/gebroken/gedroogd/ingelegd/zoetzuur/tafelzuur — alléén voor aisle-groep-1-queries (vers; kikkererwten/doperwten houden blik als top) en alleen als de query het woord zelf niet noemt. Eval-diff mét/zónder penalty: identieke misses = nul regressies; 94,7% (mais@aldi = catalogus-gat).
+- [x] Seeder-guard: blik/gebroken/gedroogd/ingelegd in DISH_WORDS (nooit een blik-variant als rank-1-hint); eval +3 rijen (sperziebonen, bietjes, mais-canary — NL vers = "Suikermais").
+- [x] Leer-loop = het populariteitsmechanisme: keuze → correctie (direct band 1 voor jou) → nachtconsensus ≥3 → lexicon-hint (band 1 voor iedereen). votes-boost in SQL bewust uitgesteld (dubbeltelling + dun signaal).
 - [x] Prijzen: dode "Koken met aanbiedingen"-rail → conditioneel + echt (recepten × deals), lege staat met CTA
 - [x] Ontdek: laden ≠ geen-resultaat ≠ offline; 0-hits toont import-CTA
 - [x] Matcher: morfologische aliassen in zoektermen + `lexicon_products` rank-1 hints geseed (`scripts/seed-lexicon-hints.mjs`) — "ui"→uien i.p.v. "Gehakt met ui"
