@@ -1,7 +1,7 @@
 import { AISLE_GROUPS, formatEuroCents, OVERIG_GROUP_ID } from '@prakkie/shared';
 import { Check, ChevronLeft, ChevronRight, Minus, Plus, Trash2, X } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ProductOptions } from '../../components/prakkie/ProductOptions';
 import { deleteRow, newId, syncNow, upsertRow, useEntityRows } from '../../data';
@@ -60,8 +60,14 @@ export default function BoodschappenScreen() {
   const [activeChain, setActiveChain] = useState<string>('ah');
   const [pricing, setPricing] = useState<ChainPricing[] | null>(null);
   const [detailItem, setDetailItem] = useState<ItemRow | null>(null);
+  const [nameDraft, setNameDraft] = useState('');
   const [quickAdd, setQuickAdd] = useState('');
   const [members, setMembers] = useState<MemberInfo[]>([]);
+
+  // naam-bewerken in de item-sheet: draft volgt het geopende item
+  useEffect(() => {
+    setNameDraft(detailItem?.name ?? '');
+  }, [detailItem?.id]);
 
   useEffect(() => {
     kv.getItem('prakkie.homechain').then((c) => c && ALL_CHAINS.includes(c) && setActiveChain(c)).catch(() => {});
@@ -237,6 +243,52 @@ export default function BoodschappenScreen() {
     refreshPricing();
   }
 
+  /** hele lijst weg — met bevestiging; items gaan mee. */
+  function removeList(target: ListRow) {
+    Alert.alert('Lijst verwijderen?', `“${target.name}” en alle items verdwijnen — ook voor je huishouden.`, [
+      { text: 'Annuleren', style: 'cancel' },
+      {
+        text: 'Verwijderen',
+        style: 'destructive',
+        onPress: async () => {
+          const children = itemRows
+            .map((r) => ({ id: r.id, row: r.row as unknown as ItemRow }))
+            .filter((r) => r.row.list_id === target.id);
+          for (const c of children) await deleteRow('list_items', c.id);
+          await deleteRow('lists', target.id);
+          setActiveListId(null);
+          setPricing(null);
+          syncNow(['lists', 'list_items']).catch(() => {});
+        },
+      },
+    ]);
+  }
+
+  /** item hernoemen: user-tekst wint, normalisatie + schap worden opnieuw afgeleid. */
+  async function renameItem(item: ItemRow) {
+    const next = nameDraft.trim();
+    if (!next || next === item.name) return;
+    await upsertRow('list_items', { list_id: item.list_id, name: next, quantity: item.quantity, unit: item.unit }, item.id);
+    setDetailItem({ ...item, name: next, item_normalised: null });
+    syncNow(['list_items']).catch(() => {});
+    try {
+      const res = await authedRequest(`/v1/match?item=${encodeURIComponent(next)}&chains=${activeChain}`);
+      if (res.ok) {
+        const body = (await res.json()) as { item: string; aisle_group_id: number | null };
+        await upsertRow(
+          'list_items',
+          { list_id: item.list_id, name: next, item_normalised: body.item, aisle_group_id: body.aisle_group_id },
+          item.id
+        );
+        setDetailItem((d) => (d && d.id === item.id ? { ...d, item_normalised: body.item } : d));
+        await syncNow(['list_items']).catch(() => {});
+        refreshPricing();
+      }
+    } catch {
+      /* offline: naam staat, verrijking volgt */
+    }
+  }
+
   async function bumpQty(item: ItemRow, delta: number) {
     const current = Number(item.quantity) || 1;
     const next = Math.max(1, Math.round((current + delta) * 100) / 100);
@@ -301,9 +353,16 @@ export default function BoodschappenScreen() {
           <>
             <View style={styles.dayHeader}>
               <Text style={styles.dayTitle}>{dutchDate(selectedDate)}</Text>
-              <Pressable onPress={() => setSelectedDate(null)} hitSlop={10}>
-                <X size={17} color={colors.textSoft} />
-              </Pressable>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+                {list ? (
+                  <Pressable onPress={() => removeList(list)} hitSlop={10} accessibilityLabel="Lijst verwijderen">
+                    <Trash2 size={16} color={colors.danger} strokeWidth={2} />
+                  </Pressable>
+                ) : null}
+                <Pressable onPress={() => setSelectedDate(null)} hitSlop={10}>
+                  <X size={17} color={colors.textSoft} />
+                </Pressable>
+              </View>
             </View>
 
             {dayLists.length > 1 ? (
@@ -466,7 +525,15 @@ export default function BoodschappenScreen() {
       {detailItem ? (
         <View style={[styles.sheet, { paddingBottom: insets.bottom + 100 }]}>
           <View style={styles.sheetHeader}>
-            <Text style={[type.h3, { flex: 1 }]} numberOfLines={1}>{detailItem.name}</Text>
+            {/* naam is bewerkbaar — user-tekst wint, schap/match herleiden mee */}
+            <TextInput
+              style={styles.nameEdit}
+              value={nameDraft}
+              onChangeText={setNameDraft}
+              onEndEditing={() => renameItem(detailItem)}
+              onSubmitEditing={() => renameItem(detailItem)}
+              returnKeyType="done"
+            />
             <Pressable onPress={() => setDetailItem(null)} hitSlop={10}>
               <X size={20} color={colors.textSoft} />
             </Pressable>
@@ -629,6 +696,10 @@ const styles = StyleSheet.create({
     shadowColor: '#000', shadowOpacity: 0.14, shadowRadius: 18, shadowOffset: { width: 0, height: -6 }, elevation: 12,
   },
   sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  nameEdit: {
+    flex: 1, fontSize: 16, fontFamily: fonts.bodyBold, color: colors.text, padding: 0,
+    borderBottomWidth: 1, borderBottomColor: 'rgba(34,48,30,.15)', paddingBottom: 3,
+  },
   sheetSection: {
     fontSize: 11, fontFamily: fonts.bodyBold, letterSpacing: 0.6, color: colors.textMuted, marginTop: 8,
   },

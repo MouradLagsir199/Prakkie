@@ -245,6 +245,13 @@ const bRow = (aSees.body.changes?.list_items?.rows ?? []).find((r) => r.id === b
 check('added_by = user B (log "wie heeft wat toegevoegd")', !!bRow && bRow.added_by === regB.body.user?.id,
   `added_by=${String(bRow?.added_by).slice(0, 8)}… verwacht ${String(regB.body.user?.id).slice(0, 8)}…`);
 
+// lijst verwijderen (owner UX): A gooit de gedeelde lijst weg → ook weg bij B
+const delList = await push(token, [{ entity: 'lists', op: 'delete', id: sharedList, base_updated_at: null }]);
+const bAfter = await jfetch('/v1/sync?entities=lists', {}, tokenB);
+const goneRow = (bAfter.body.changes?.lists?.rows ?? []).find((r) => r.id === sharedList);
+check('lijst verwijderen synct als tombstone naar B', delList.status === 200 && !!goneRow?.deleted_at,
+  goneRow?.deleted_at ? 'tombstone gezien' : 'nog zichtbaar');
+
 // ---------------------------------------------------------------- 6. PRODUCTKEUZE (dropdown-contract)
 console.log('\n— productkeuze: shortlist altijd + breed (user bepaalt) —');
 const rb = await jfetch(`/v1/match?item=roomboter&chains=ah`, {}, token);
