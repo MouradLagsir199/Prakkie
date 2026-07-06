@@ -1,63 +1,99 @@
 import type { CachedRow, LocalStore, PendingMutation, SyncEntityName, SyncMutation } from '@prakkie/shared';
 
 /**
- * Web fallback for the offline store (Metro platform fork of database.ts).
- * The Expo web target is a preview, not the offline-first product surface —
- * an in-memory replica per session is enough there; native uses expo-sqlite.
+ * Web platform fork of the offline store — PERSISTENT, full experience:
+ * localStorage-backed implementation of the same LocalStore contract the
+ * expo-sqlite adapter fulfils natively. (sqlite-wasm would demand COOP/COEP
+ * cross-origin isolation, which breaks loading recipe images from chain CDNs —
+ * localStorage keeps offline persistence without那 trade-off.)
  */
-export class SqliteStore implements LocalStore {
-  private rows = new Map<string, CachedRow>();
-  private cursors = new Map<string, string>();
-  private pending: PendingMutation[] = [];
-  private seq = 0;
 
+const P = 'prakkie:'; // key namespace
+
+function read<T>(key: string, fallback: T): T {
+  try {
+    const raw = globalThis.localStorage?.getItem(P + key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+function write(key: string, value: unknown): void {
+  try {
+    globalThis.localStorage?.setItem(P + key, JSON.stringify(value));
+  } catch {
+    /* quota: drop writes rather than crash; server stays source of truth */
+  }
+}
+function remove(key: string): void {
+  globalThis.localStorage?.removeItem(P + key);
+}
+
+/** per-entity id index so listRows stays O(entity size), not O(storage) */
+function ids(entity: string): string[] {
+  return read<string[]>(`idx:${entity}`, []);
+}
+function setIds(entity: string, list: string[]): void {
+  write(`idx:${entity}`, list);
+}
+
+export class SqliteStore implements LocalStore {
   static async open(_name = 'prakkie.db'): Promise<SqliteStore> {
     return new SqliteStore();
   }
 
-  private key(entity: string, id: string) {
-    return `${entity}:${id}`;
+  async getRow(entity: SyncEntityName, id: string): Promise<CachedRow | null> {
+    return read<CachedRow | null>(`row:${entity}:${id}`, null);
   }
-  async getRow(entity: SyncEntityName, id: string) {
-    return this.rows.get(this.key(entity, id)) ?? null;
+  async putRow(entity: SyncEntityName, row: CachedRow): Promise<void> {
+    write(`row:${entity}:${row.id}`, row);
+    const list = ids(entity);
+    if (!list.includes(row.id)) setIds(entity, [...list, row.id]);
   }
-  async putRow(entity: SyncEntityName, row: CachedRow) {
-    this.rows.set(this.key(entity, row.id), row);
+  async removeRow(entity: SyncEntityName, id: string): Promise<void> {
+    remove(`row:${entity}:${id}`);
+    setIds(entity, ids(entity).filter((x) => x !== id));
   }
-  async removeRow(entity: SyncEntityName, id: string) {
-    this.rows.delete(this.key(entity, id));
+  async listRows(entity: SyncEntityName): Promise<CachedRow[]> {
+    return ids(entity)
+      .map((id) => read<CachedRow | null>(`row:${entity}:${id}`, null))
+      .filter((r): r is CachedRow => r !== null);
   }
-  async listRows(entity: SyncEntityName) {
-    return [...this.rows.entries()].filter(([k]) => k.startsWith(`${entity}:`)).map(([, v]) => v);
+  async getCursor(entity: SyncEntityName): Promise<string | null> {
+    return read<string | null>(`cursor:${entity}`, null);
   }
-  async getCursor(entity: SyncEntityName) {
-    return this.cursors.get(entity) ?? null;
+  async setCursor(entity: SyncEntityName, iso: string): Promise<void> {
+    write(`cursor:${entity}`, iso);
   }
-  async setCursor(entity: SyncEntityName, iso: string) {
-    this.cursors.set(entity, iso);
+  async getPending(): Promise<PendingMutation[]> {
+    return read<PendingMutation[]>('pending', []);
   }
-  async getPending() {
-    return [...this.pending];
+  async addPending(m: SyncMutation): Promise<void> {
+    const pending = read<PendingMutation[]>('pending', []);
+    const seq = (read<number>('pending:seq', 0) as number) + 1;
+    write('pending:seq', seq);
+    write('pending', [...pending, { ...m, seq }]);
   }
-  async addPending(m: SyncMutation) {
-    this.pending.push({ ...m, seq: ++this.seq });
+  async updatePending(seq: number, fields: Record<string, unknown>, base: string | null): Promise<void> {
+    write(
+      'pending',
+      read<PendingMutation[]>('pending', []).map((p) =>
+        p.seq === seq ? { ...p, fields, base_updated_at: base } : p
+      )
+    );
   }
-  async updatePending(seq: number, fields: Record<string, unknown>, base: string | null) {
-    const m = this.pending.find((p) => p.seq === seq);
-    if (m) {
-      m.fields = fields;
-      m.base_updated_at = base;
+  async removePending(seqs: number[]): Promise<void> {
+    write('pending', read<PendingMutation[]>('pending', []).filter((p) => !seqs.includes(p.seq)));
+  }
+  async removePendingForId(entity: SyncEntityName, id: string): Promise<void> {
+    write('pending', read<PendingMutation[]>('pending', []).filter((p) => !(p.entity === entity && p.id === id)));
+  }
+  async clear(): Promise<void> {
+    const keys: string[] = [];
+    for (let i = 0; i < (globalThis.localStorage?.length ?? 0); i++) {
+      const k = globalThis.localStorage.key(i);
+      if (k?.startsWith(P)) keys.push(k);
     }
-  }
-  async removePending(seqs: number[]) {
-    this.pending = this.pending.filter((p) => !seqs.includes(p.seq));
-  }
-  async removePendingForId(entity: SyncEntityName, id: string) {
-    this.pending = this.pending.filter((p) => !(p.entity === entity && p.id === id));
-  }
-  async clear() {
-    this.rows.clear();
-    this.cursors.clear();
-    this.pending = [];
+    keys.forEach((k) => globalThis.localStorage.removeItem(k));
   }
 }

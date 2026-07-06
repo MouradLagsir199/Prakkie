@@ -59,7 +59,7 @@ export const SYNC_ENTITIES = {
   lists: {
     table: 'app.lists',
     scope: 'ownerHousehold',
-    writable: ['household_id', 'name', 'layout_chain_id', 'sort_order'],
+    writable: ['household_id', 'name', 'layout_chain_id', 'sort_order', 'week_start'],
     jsonb: [],
     fieldGroups: [],
     insertRequired: ['name'],

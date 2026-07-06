@@ -119,6 +119,49 @@ const ahBest = match.body.matches?.ah?.best;
 check('match: passata → gezeefde tomaten (lexicon alias)', match.status === 200 && !!ahBest && /gezeefde|passata/i.test(ahBest.name),
   ahBest ? `"${ahBest.name}" (${ahBest.source})` : 'no match');
 
+// 8. week-tied lists (owner UX 2026-07-06): week_start round-trips through sync
+const wlid = crypto.randomUUID();
+const monday = (() => { const d = new Date(); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d.toISOString().slice(0, 10); })();
+await jfetch('/v1/sync/push', {
+  method: 'POST',
+  body: JSON.stringify({ mutations: [{ entity: 'lists', op: 'upsert', id: wlid, base_updated_at: null, fields: { name: 'Weekboodschappen', week_start: monday } }] }),
+}, token);
+const pull = await jfetch(`/v1/sync?since=1970-01-01T00:00:00Z&entities=lists`, {}, token);
+const weekRow = (pull.body.changes?.lists?.rows ?? []).find((r) => r.id === wlid);
+check('week-tied list: week_start persists through sync', String(weekRow?.week_start ?? '').slice(0, 10) === monday, `got ${weekRow?.week_start}`);
+
+// 9. variant pinning (owner UX): user switches product; pricing uses the pinned sku
+const itemsRes = await jfetch(`/v1/lists/${lid}/price?chains=ah`, {}, token);
+const firstMatched = (itemsRes.body.chains?.[0]?.lines ?? []).find((l) => l.matched);
+if (firstMatched) {
+  // pick a DIFFERENT product from the shortlist for that item
+  const itemRow = await jfetch(`/v1/sync?since=1970-01-01T00:00:00Z&entities=list_items`, {}, token);
+  const target = (itemRow.body.changes?.list_items?.rows ?? []).find((r) => r.id === firstMatched.item_id);
+  const term = encodeURIComponent(target?.item_normalised ?? target?.name ?? 'melk');
+  const shortRes = await jfetch(`/v1/match?item=${term}&chains=ah`, {}, token);
+  const shortlist = shortRes.body.matches?.ah?.shortlist ?? [];
+  const alternative = shortlist.find((s) => s.sku_id !== firstMatched.sku_id);
+  if (alternative) {
+    await jfetch('/v1/sync/push', {
+      method: 'POST',
+      body: JSON.stringify({
+        mutations: [{
+          entity: 'list_items', op: 'upsert', id: firstMatched.item_id, base_updated_at: null,
+          fields: { list_id: lid, name: target?.name ?? 'item', matches: { ...(target?.matches ?? {}), ah: { sku_id: alternative.sku_id, confidence: 1, user_pinned: true } } },
+        }],
+      }),
+    }, token);
+    const repriced = await jfetch(`/v1/lists/${lid}/price?chains=ah`, {}, token);
+    const line = (repriced.body.chains?.[0]?.lines ?? []).find((l) => l.item_id === firstMatched.item_id);
+    check('pinned variant drives the price (user can verify/switch)', line?.sku_id === alternative.sku_id,
+      `line sku ${line?.sku_id} vs pinned ${alternative.sku_id} ("${alternative.name}")`);
+  } else {
+    check('pinned variant drives the price (user can verify/switch)', true, 'skipped — shortlist had no alternative');
+  }
+} else {
+  check('pinned variant drives the price', false, 'no matched line to pin');
+}
+
 // 8. Ontdek feed (WS7) — crawled corpus + save-flow detail
 const feed = await jfetch('/v1/discover?limit=10', {}, token);
 check('discover feed has crawled recipes', feed.status === 200 && (feed.body.items?.length ?? 0) > 0,

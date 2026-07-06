@@ -44,6 +44,8 @@ export const ShoppingList = z.object({
   name: z.string(),
   /** Drives the "AH-indeling" layout chip (mockup 06). */
   layout_chain_id: ChainId.default('ah'),
+  /** Monday (ISO week) this list belongs to — every list is week-tied (owner UX 2026-07-06). */
+  week_start: z.string().nullable().default(null),
   sort_order: z.number().int().default(0),
   created_at: z.string().datetime(),
   updated_at: z.string().datetime(),
