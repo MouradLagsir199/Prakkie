@@ -42,6 +42,18 @@ const DISH_WORDS = [
   // gebak is geen ingrediënt: "Roomboter croissant" werd de hint voor roomboter
   'croissant', 'croissants', 'koekje', 'koekjes', 'biscuit', 'biscuits', 'sprits', 'spritsen',
 ];
+// Handmatige overrides waar géén trigram-tuning kan helpen: de zoekterm en de
+// winkel-eigen naam delen simpelweg te weinig letters (owner 2026-07-07 —
+// "penotti" vindt bij Aldi niks, want dat heet daar kaal "Duopasta"; trgm-
+// gelijkenis is ~0, dus de fuzzy-matcher komt er nooit via tuning). Los van
+// ingredient_lexicon: item_normalised hier is de rauwe zoekterm zelf, want
+// de hints-lookup in match.ts matcht altijd (ook) op de ongewijzigde term.
+// Overleven de volledige reseed hierboven (DELETE FROM lexicon_products) omdat
+// ze hierna opnieuw worden toegepast — dus altijd, ook bij --only.
+const MANUAL_HINTS = [
+  { item: 'penotti', chain: 'aldi', nameFold: 'duopasta' },
+];
+
 const STORE_BRANDS =
   '(ah|ah biologisch|jumbo|jumbo biologisch|plus|spar|aldi|dirk|1 de beste|g woon|gwoon|markant|boni|perfekt|elvee|nature|bio\\+|bio)';
 
@@ -170,5 +182,30 @@ for (const lex of items) {
     seeded++;
   }
 }
-console.log(`${dry ? 'would seed' : 'seeded'} ${seeded} hints (${skipped} item×chain combos left to trgm)`);
+// handmatige overrides — altijd toegepast, ook als --only een ander item filtert
+let manual = 0;
+for (const m of MANUAL_HINTS) {
+  const { rows } = await client.query(
+    `SELECT sku_id FROM catalog.products WHERE chain_id = $1 AND public.fold_text(name) = $2 AND available`,
+    [m.chain, m.nameFold]
+  );
+  const sku = rows[0]?.sku_id;
+  if (!sku) {
+    console.log(`  MANUAL_HINT niet gevonden: ${m.item}@${m.chain} → "${m.nameFold}" (product verdwenen/hernoemd?)`);
+    continue;
+  }
+  if (dry) {
+    console.log(`  MANUAL ${m.item} @ ${m.chain} → sku ${sku} ("${m.nameFold}")`);
+  } else {
+    await client.query(
+      `INSERT INTO catalog.lexicon_products (item_normalised, chain_id, sku_id, rank)
+       VALUES ($1, $2, $3, 1)
+       ON CONFLICT (item_normalised, chain_id) DO UPDATE SET sku_id = EXCLUDED.sku_id, rank = 1`,
+      [m.item, m.chain, sku]
+    );
+  }
+  manual++;
+}
+
+console.log(`${dry ? 'would seed' : 'seeded'} ${seeded} hints + ${manual} handmatige overrides (${skipped} item×chain combos left to trgm)`);
 await client.end();
