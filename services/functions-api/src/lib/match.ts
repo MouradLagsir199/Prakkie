@@ -66,7 +66,7 @@ export async function resolveLexicon(
 }
 
 // composite/processed product words: penalised when absent from the query itself
-const PROCESSED_RX = '\\m(saus|soep|salade|mix|kruidenmix|poeder|drink|snack|chips|koek|smaak|geur|shampoo|spray|kattenvoer|hondenvoer|schotel|dagschotel|maaltijd)\\M';
+const PROCESSED_RX = '\\m(saus|soep|salade|mix|kruidenmix|poeder|drink|snack|chips|koek|koekje|koekjes|biscuit|biscuits|croissant|croissants|sprits|spritsen|smaak|geur|shampoo|spray|kattenvoer|hondenvoer|schotel|dagschotel|maaltijd)\\M';
 
 // form words (conserven/bewerkingen): who "sperziebonen" zoekt wil vrijwel nooit
 // "in blik gebroken". Alleen toegepast op vers-producten (aisle-groep 1) — bij

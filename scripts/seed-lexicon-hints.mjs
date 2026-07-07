@@ -39,6 +39,8 @@ const DISH_WORDS = [
   // dé rank-1-hint worden. Bewust niet 'pot'/'zoetzuur-alleen': augurken e.d.
   // houden hun hint via de bestaande "item is zelf zo'n woord"-escape.
   'blik', 'blikje', 'blikjes', 'gebroken', 'gedroogd', 'gedroogde', 'ingelegd', 'ingelegde',
+  // gebak is geen ingrediënt: "Roomboter croissant" werd de hint voor roomboter
+  'croissant', 'croissants', 'koekje', 'koekjes', 'biscuit', 'biscuits', 'sprits', 'spritsen',
 ];
 const STORE_BRANDS =
   '(ah|ah biologisch|jumbo|jumbo biologisch|plus|spar|aldi|dirk|1 de beste|g woon|gwoon|markant|boni|perfekt|elvee|nature|bio\\+|bio)';
