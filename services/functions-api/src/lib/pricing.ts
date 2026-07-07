@@ -126,7 +126,10 @@ interface ListItemRow {
 }
 
 function neededBase(item: ListItemRow): { value: number; unit: string } | null {
-  if (item.quantity === null || !item.unit) return null;
+  if (item.quantity === null) return null;
+  // kale aantallen ("2" zonder eenheid, de qty-stepper) zijn stuks: 2× het
+  // product = 2× de (bonus)prijs — owner 2026-07-07
+  if (!item.unit) return { value: Number(item.quantity) || 1, unit: 'st' };
   const canon = normaliseUnit(item.unit, Number(item.quantity));
   return canon ? { value: canon.value, unit: canon.unit } : null;
 }

@@ -204,6 +204,15 @@
 - [x] Server FORM_RX-penalty (−0.22): blik/pot/gebroken/gedroogd/ingelegd/zoetzuur/tafelzuur — alléén voor aisle-groep-1-queries (vers; kikkererwten/doperwten houden blik als top) en alleen als de query het woord zelf niet noemt. Eval-diff mét/zónder penalty: identieke misses = nul regressies; 94,7% (mais@aldi = catalogus-gat).
 - [x] Seeder-guard: blik/gebroken/gedroogd/ingelegd in DISH_WORDS (nooit een blik-variant als rank-1-hint); eval +3 rijen (sperziebonen, bietjes, mais-canary — NL vers = "Suikermais").
 - [x] Leer-loop = het populariteitsmechanisme: keuze → correctie (direct band 1 voor jou) → nachtconsensus ≥3 → lexicon-hint (band 1 voor iedereen). votes-boost in SQL bewust uitgesteld (dubbeltelling + dun signaal).
+
+## Boodschappen v3 (2026-07-07) — draft/Opslaan, per-super groepen, favorieten, bulk-wissel
+
+- [x] **Draft-model**: elke lijst-bewerking (toevoegen, verwijderen, hernoemen, aantal, productkeuze, bulk-wissel, lijstje laden) is een concept tot Opslaan; Annuleren gooit alles weg; dag/lijst-wissel met openstaand concept vraagt bevestiging. Afvinken blijft direct (winkel-modus). Correcties voor de matcher gaan pas mee bij Opslaan.
+- [x] **Per-supermarkt groepen** met subtotaal per super (schap-categorieën weg); "Nog te kiezen"-groep onderaan; prullenbakje per regel (annuleerbaar via draft).
+- [x] **"Alles bij X" tikbaar**: complete super in de "Waar ga je halen?"-kaart wisselt het hele lijstje naar de producten daar (in concept; items zonder match blijven staan; geen bulk-correcties naar de leer-loop).
+- [x] **Opgeslagen lijstjes** = lijsten zonder datum: bewaar-sheet (naam) + laad-sheet (tik → items in concept van de dag; verwijderbaar). Gedeeld met het huishouden.
+- [x] **Aantal ×2 = prijs ×2**: server-side kale aantallen = stuks (packs=qty, bonusprijs per stuk telt mee) — live bewezen (1× €1,29 → 3× €3,87); client schaalt draft-prijzen lineair mee incl. net gekozen product (_unit_cents).
+- [x] Verificatie: tsc mobile+api, expo web export, deploy, live qty-check, e2e-smoke volledig groen.
 - [x] Prijzen: dode "Koken met aanbiedingen"-rail → conditioneel + echt (recepten × deals), lege staat met CTA
 - [x] Ontdek: laden ≠ geen-resultaat ≠ offline; 0-hits toont import-CTA
 - [x] Matcher: morfologische aliassen in zoektermen + `lexicon_products` rank-1 hints geseed (`scripts/seed-lexicon-hints.mjs`) — "ui"→uien i.p.v. "Gehakt met ui"

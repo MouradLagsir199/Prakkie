@@ -1,5 +1,7 @@
-import { AISLE_GROUPS, formatEuroCents, OVERIG_GROUP_ID } from '@prakkie/shared';
-import { Check, ChevronLeft, ChevronRight, Minus, Plus, Search, Trash2, X } from 'lucide-react-native';
+import { formatEuroCents } from '@prakkie/shared';
+import {
+  Bookmark, BookmarkPlus, Check, ChevronLeft, ChevronRight, Minus, Plus, Search, Trash2, X,
+} from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -14,18 +16,18 @@ import { authedRequest } from '../../data/api';
 import { addDays, CHAIN_BRAND, chainChip, chainName, mondayOf, weekRangeLabel } from '../../data/chains';
 import { activeHouseholdId, loadHousehold, memberName, type MemberInfo } from '../../data/households';
 import { kv } from '../../data/kv';
-import { confirmDialog } from '../../lib/dialogs';
+import { confirmDialog, notice } from '../../lib/dialogs';
 import { colors, fonts, radius, type } from '../../theme/tokens';
 
 /**
- * Boodschappen (owner UX 2026-07-07, tweede iteratie):
- *  - week-strip (7 dagen, pijlen ← →) met puntjes op dagen met een lijst;
- *  - zoek-eerst: één zoekbalk, resultaten uit ál je supers in één lijst,
- *    goedkoopste bovenaan — tikken = op de lijst mét jouw productkeuze;
- *  - één lijst (per schap), géén per-supermarkt-tabs meer;
- *  - "Waar ga je halen?": alles-bij-X totalen per super + slim verdelen
- *    over 2+ winkels met de besparing erbij — de user beslist;
- *  - de app kiest NOOIT een product; huishouden-log blijft.
+ * Boodschappen v3 (owner UX 2026-07-07, derde iteratie):
+ *  - week-strip met puntjes; zoek-eerst over ál je supers (banden, prijs-oplopend);
+ *  - DRAFT-model: elke lijst-bewerking is een concept tot je op Opslaan tikt —
+ *    Annuleren gooit alles weg (afvinken in de winkel blijft wél direct);
+ *  - lijst gegroepeerd per supermarkt met subtotalen (schap-categorieën weg);
+ *  - prullenbakje per regel; "Alles bij X" tikbaar → heel lijstje wisselt (in draft);
+ *  - opgeslagen lijstjes: bewaar als favoriet + laad in een andere dag;
+ *  - aantal ×2 = prijs ×2 (bonusprijs telt per stuk mee, server-side gefixt).
  */
 
 interface ListRow { id: string; name: string; week_start?: string | null; household_id?: string | null }
@@ -39,6 +41,8 @@ interface ItemRow {
   added_by?: string | null;
   created_at?: string;
   updated_at?: string;
+  /** client-only: stuksprijs van het zojuist gekozen product (draft, nog niet geprijsd door de server) */
+  _unit_cents?: number | null;
 }
 interface PricedLine {
   item_id: string; matched: boolean; sku_id?: string; product_name?: string;
@@ -47,10 +51,12 @@ interface PricedLine {
 interface ChainPricing {
   chain_id: string; total_cents: number; matched: number; unmatched: string[]; lines: PricedLine[];
 }
+interface Correction { chain_id: string; item_normalised: string; chosen_sku_id: string }
 
 const ALL_CHAINS = ['ah', 'jumbo', 'plus', 'dirk', 'spar', 'aldi'];
 const MONTHS_NL = ['januari', 'februari', 'maart', 'april', 'mei', 'juni', 'juli', 'augustus', 'september', 'oktober', 'november', 'december'];
 const DAYS_NL = ['ma', 'di', 'wo', 'do', 'vr', 'za', 'zo'];
+const MIN_CONFIDENCE = 0.45;
 
 const todayIso = () => {
   const d = new Date();
@@ -69,6 +75,26 @@ function chosenChainOf(item: ItemRow, myChains: string[]): string | null {
   return [...myChains, ...Object.keys(m)].find((c) => m[c]?.user_pinned) ?? null;
 }
 
+/** kale aantallen (geen eenheid / stuks) schalen de prijs lineair mee */
+const isCount = (i: ItemRow) => !i.unit || i.unit === 'st' || i.unit === 'stuks';
+const countQty = (i: ItemRow) => Math.max(1, Number(i.quantity) || 1);
+
+/** de velden die de server kent — client-only velden (_unit_cents) blijven thuis */
+function itemFields(i: ItemRow): Record<string, unknown> {
+  return {
+    list_id: i.list_id,
+    name: i.name,
+    quantity: i.quantity ?? null,
+    unit: i.unit ?? null,
+    item_normalised: i.item_normalised ?? null,
+    aisle_group_id: i.aisle_group_id ?? null,
+    is_manual: !!i.is_manual,
+    matches: i.matches ?? {},
+    checked: !!i.checked,
+    ...(i.provenance ? { provenance: i.provenance } : {}),
+  };
+}
+
 export default function BoodschappenScreen() {
   const insets = useSafeAreaInsets();
   const { rows: listRows } = useEntityRows('lists');
@@ -83,6 +109,12 @@ export default function BoodschappenScreen() {
   const [search, setSearch] = useState('');
   const [searchDebounced, setSearchDebounced] = useState('');
   const [members, setMembers] = useState<MemberInfo[]>([]);
+  // het draft-model: null = live (opgeslagen) weergave; anders het concept
+  const [draftItems, setDraftItems] = useState<ItemRow[] | null>(null);
+  const [draftCorrections, setDraftCorrections] = useState<Correction[]>([]);
+  const [savingDraft, setSavingDraft] = useState(false);
+  const [sheet, setSheet] = useState<'none' | 'save' | 'load'>('none');
+  const [templateName, setTemplateName] = useState('');
 
   // naam-bewerken in de item-sheet: draft volgt het geopende item
   useEffect(() => {
@@ -125,6 +157,8 @@ export default function BoodschappenScreen() {
   );
   const dateOf = (l: ListRow) => (l.week_start ?? '').slice(0, 10);
   const dotDates = useMemo(() => new Set(lists.map(dateOf).filter(Boolean)), [lists]);
+  // opgeslagen lijstjes = lijsten zonder datum (templates)
+  const templates = useMemo(() => lists.filter((l) => !dateOf(l)), [lists]);
 
   // week-strip: 7 dagen, pijlen wisselen van week
   const weekStart = useMemo(() => mondayOf(weekOffset), [weekOffset]);
@@ -132,16 +166,6 @@ export default function BoodschappenScreen() {
     () => [0, 1, 2, 3, 4, 5, 6].map((i) => addDays(weekStart, i)),
     [weekStart]
   );
-  function shiftWeek(delta: number) {
-    const idx = weekDays.indexOf(selectedDate);
-    const next = mondayOf(weekOffset + delta);
-    setWeekOffset(weekOffset + delta);
-    setSelectedDate(addDays(next, idx >= 0 ? idx : 0)); // zelfde weekdag in de nieuwe week
-  }
-  function jumpToToday() {
-    setWeekOffset(0);
-    setSelectedDate(todayIso());
-  }
 
   const dayLists = useMemo(
     () => lists.filter((l) => dateOf(l) === selectedDate),
@@ -152,7 +176,53 @@ export default function BoodschappenScreen() {
     () => itemRows.map((r) => r.row as unknown as ItemRow).filter((i) => list && i.list_id === list.id),
     [itemRows, list]
   );
-  const checkedCount = items.filter((i) => i.checked).length;
+  // wat je op het scherm ziet: het concept als dat er is, anders de opgeslagen staat
+  const displayItems = draftItems ?? items;
+  const hasDraft = draftItems !== null;
+  const checkedCount = displayItems.filter((i) => i.checked).length;
+
+  /** elke bewerking gaat het concept in; pas Opslaan schrijft echt weg */
+  const mutateDraft = useCallback(
+    (fn: (rows: ItemRow[]) => ItemRow[]) => {
+      setDraftItems((prev) => fn((prev ?? items).map((r) => ({ ...r }))));
+    },
+    [items]
+  );
+
+  async function discardDraftGuard(): Promise<boolean> {
+    if (!draftItems) return true;
+    const ok = await confirmDialog({
+      title: 'Wijzigingen weggooien?',
+      message: 'Je hebt niet-opgeslagen wijzigingen op deze lijst.',
+      confirmLabel: 'Weggooien',
+      destructive: true,
+    });
+    if (ok) {
+      setDraftItems(null);
+      setDraftCorrections([]);
+    }
+    return ok;
+  }
+
+  async function shiftWeek(delta: number) {
+    if (!(await discardDraftGuard())) return;
+    const idx = weekDays.indexOf(selectedDate);
+    const next = mondayOf(weekOffset + delta);
+    setWeekOffset(weekOffset + delta);
+    setSelectedDate(addDays(next, idx >= 0 ? idx : 0));
+    setDetailItem(null);
+  }
+  async function selectDay(date: string) {
+    if (date === selectedDate) return;
+    if (!(await discardDraftGuard())) return;
+    setSelectedDate(date);
+    setDetailItem(null);
+  }
+  async function jumpToToday() {
+    if (!(await discardDraftGuard())) return;
+    setWeekOffset(0);
+    setSelectedDate(todayIso());
+  }
 
   // log: wie heeft als laatst iets toegevoegd (huishouden)
   const lastAdded = useMemo(() => {
@@ -180,56 +250,107 @@ export default function BoodschappenScreen() {
   useEffect(() => {
     const t = setTimeout(refreshPricing, 350);
     return () => clearTimeout(t);
-  }, [refreshPricing, checkedCount]);
+  }, [refreshPricing]);
 
-  // prijsregels per keten per item
+  // prijsregels per keten per item (van de opgeslagen staat)
   const linesByChain = useMemo(() => {
     const m = new Map<string, Map<string, PricedLine>>();
     for (const c of pricing ?? []) m.set(c.chain_id, new Map(c.lines.map((l) => [l.item_id, l])));
     return m;
   }, [pricing]);
 
-  const lineFor = (item: ItemRow, chain: string | null) =>
-    chain ? linesByChain.get(chain)?.get(item.id) : undefined;
+  /** regelprijs van dit item bij deze keten — draft-bewust: kale aantallen
+   *  schalen lineair (bonus zit al in de serverregel per stuk), en een net
+   *  gekozen product draagt zijn eigen stuksprijs (_unit_cents) mee. */
+  const lineCentsAt = useCallback(
+    (item: ItemRow, chain: string): number | null => {
+      const line = linesByChain.get(chain)?.get(item.id);
+      if (isCount(item)) {
+        const pinnedHere = chosenChainOf(item, myChains) === chain;
+        const unit =
+          pinnedHere && item._unit_cents != null
+            ? item._unit_cents
+            : line?.matched && line.line_price_cents != null
+              ? line.line_price_cents / Math.max(1, line.packs ?? 1)
+              : null;
+        return unit === null ? null : Math.round(unit * countQty(item));
+      }
+      return line?.matched && line.line_price_cents != null ? line.line_price_cents : null;
+    },
+    [linesByChain, myChains]
+  );
 
-  // "de app doet nooit een voorspelling": het hoofdtotaal telt alleen door de
-  // user gekozen producten — bij de keten waar de user ze koos.
+  /** alleen betrouwbare regels tellen mee in totalen: gepind of hoge confidence */
+  const reliableCentsAt = useCallback(
+    (item: ItemRow, chain: string): number | null => {
+      const pinnedHere = !!item.matches?.[chain]?.user_pinned;
+      const line = linesByChain.get(chain)?.get(item.id);
+      if (!pinnedHere && !(line?.matched && (line.confidence ?? 0) >= MIN_CONFIDENCE)) return null;
+      return lineCentsAt(item, chain);
+    },
+    [linesByChain, lineCentsAt]
+  );
+
+  const openItems = useMemo(() => displayItems.filter((i) => !i.checked), [displayItems]);
+
+  // hoofdtotaal: alleen wat de user zelf koos, bij de keten waar die het koos
   const chosenTotal = useMemo(() => {
     let cents = 0;
     let chosen = 0;
-    for (const item of items) {
+    for (const item of openItems) {
       const chain = chosenChainOf(item, myChains);
-      const line = lineFor(item, chain);
-      if (chain && line?.matched && line.line_price_cents != null) {
-        cents += line.line_price_cents;
+      const c = chain ? lineCentsAt(item, chain) : null;
+      if (c != null) {
+        cents += c;
         chosen++;
       }
     }
-    return { cents, chosen, open: items.length - chosen };
-  }, [items, linesByChain, myChains]);
+    return { cents, chosen, open: openItems.length - chosen };
+  }, [openItems, myChains, lineCentsAt]);
 
-  // Waar ga je halen? — alles-bij-X per super + slim verdelen over winkels.
-  // Een regel telt alleen mee als de match betrouwbaar is (gepind of hoge
-  // confidence); kan de lijst niet compleet bij één super, dan wordt die
-  // grijs zonder totaal — een half totaal zou liegen.
-  const MIN_CONFIDENCE = 0.45;
+  // per-supermarkt groepen met subtotalen (owner: schap-categorieën weg)
+  const chainGroups = useMemo(() => {
+    const by = new Map<string, ItemRow[]>();
+    for (const it of displayItems) {
+      const c = chosenChainOf(it, myChains) ?? '__none';
+      (by.get(c) ?? by.set(c, []).get(c)!).push(it);
+    }
+    const order = [
+      ...myChains.filter((c) => by.has(c)),
+      ...[...by.keys()].filter((c) => c !== '__none' && !myChains.includes(c)),
+      ...(by.has('__none') ? ['__none'] : []),
+    ];
+    return order.map((key) => {
+      const chain = key === '__none' ? null : key;
+      const groupItems = by.get(key)!;
+      let subtotal = 0;
+      let priced = 0;
+      if (chain) {
+        for (const it of groupItems) {
+          if (it.checked) continue;
+          const c = lineCentsAt(it, chain);
+          if (c != null) {
+            subtotal += c;
+            priced++;
+          }
+        }
+      }
+      return { chain, items: groupItems, subtotal, priced };
+    });
+  }, [displayItems, myChains, lineCentsAt]);
+
+  // Waar ga je halen? — alles-bij-X per super + slim verdelen; niet-complete
+  // supers grijs zonder totaal (een half totaal zou liegen)
   const storeAdvice = useMemo(() => {
-    if (!pricing || items.length === 0) return null;
-    const reliableLine = (item: ItemRow, chain: string): PricedLine | null => {
-      const l = linesByChain.get(chain)?.get(item.id);
-      if (!l?.matched || l.line_price_cents == null) return null;
-      const pinnedHere = !!item.matches?.[chain]?.user_pinned;
-      return pinnedHere || (l.confidence ?? 0) >= MIN_CONFIDENCE ? l : null;
-    };
-
+    if (!pricing || openItems.length === 0) return null;
     const singles = myChains
       .filter((c) => linesByChain.has(c))
       .map((c) => {
         let total = 0;
         let missing = 0;
-        for (const item of items) {
-          const l = reliableLine(item, c);
-          if (l) total += l.line_price_cents!;
+        for (const item of openItems) {
+          const cents = reliableCentsAt(item, c);
+          if (cents != null) total += cents;
           else missing++;
         }
         return { chain_id: c, total_cents: total, missing, complete: missing === 0 };
@@ -243,13 +364,11 @@ export default function BoodschappenScreen() {
       let total = 0;
       let missing = 0;
       const counts = new Map<string, number>();
-      for (const item of items) {
+      for (const item of openItems) {
         let bestLine: { chain: string; cents: number } | null = null;
         for (const c of myChains) {
-          const l = reliableLine(item, c);
-          if (l && (bestLine === null || l.line_price_cents! < bestLine.cents)) {
-            bestLine = { chain: c, cents: l.line_price_cents! };
-          }
+          const cents = reliableCentsAt(item, c);
+          if (cents != null && (bestLine === null || cents < bestLine.cents)) bestLine = { chain: c, cents };
         }
         if (!bestLine) { missing++; continue; }
         total += bestLine.cents;
@@ -259,21 +378,17 @@ export default function BoodschappenScreen() {
     }
     const savings = split && best ? best.total_cents - split.total : 0;
     return { singles, best, split, savings };
-  }, [pricing, items, myChains, linesByChain]);
+  }, [pricing, openItems, myChains, linesByChain, reliableCentsAt]);
 
-  const groups = useMemo(() => {
-    const byAisle = new Map<number, ItemRow[]>();
-    for (const item of items) {
-      const key = item.aisle_group_id ?? OVERIG_GROUP_ID;
-      (byAisle.get(key) ?? byAisle.set(key, []).get(key)!).push(item);
-    }
-    return AISLE_GROUPS.filter((g) => byAisle.has(g.id)).map((g) => ({ group: g, items: byAisle.get(g.id)! }));
-  }, [items]);
-
-  // zoekresultaten over ál je supers, goedkoopste eerst
+  // zoekresultaten over ál je supers
   const searchOptions = useCrossChainOptions(searchDebounced || null, myChains);
 
   async function toggle(item: ItemRow) {
+    // afvinken is winkel-modus: direct, tenzij er al een concept openstaat
+    if (hasDraft || !items.some((i) => i.id === item.id)) {
+      mutateDraft((rows) => rows.map((r) => (r.id === item.id ? { ...r, checked: !r.checked } : r)));
+      return;
+    }
     await upsertRow('list_items', { list_id: item.list_id, name: item.name, checked: !item.checked }, item.id);
     syncNow(['list_items']).catch(() => {});
   }
@@ -294,8 +409,7 @@ export default function BoodschappenScreen() {
     return id;
   }
 
-  /** zoek-eerst: op de lijst — mét productkeuze (tap op resultaat) of zonder.
-   *  Bij een keuze wordt de producttitel de itemnaam (owner 2026-07-07). */
+  /** zoek-eerst: in het concept — mét productkeuze (tap op resultaat) of zonder. */
   async function addFromSearch(option?: CrossChainOption) {
     const typed = search.trim();
     if (!typed) return;
@@ -303,79 +417,158 @@ export default function BoodschappenScreen() {
     setSearchDebounced('');
     const listId = list?.id ?? (await newList(selectedDate));
     const itemId = newId();
-    await upsertRow(
-      'list_items',
-      {
-        list_id: listId,
-        name: option ? option.name : typed,
-        is_manual: true,
-        ...(option
-          ? { matches: { [option.chain]: { sku_id: option.sku_id, confidence: 1, user_pinned: true, preferred: true } } }
-          : {}),
-      },
-      itemId
-    );
+    const fresh: ItemRow = {
+      id: itemId,
+      list_id: listId,
+      name: option ? option.name : typed,
+      quantity: null,
+      unit: null,
+      aisle_group_id: null,
+      checked: false,
+      is_manual: true,
+      item_normalised: null,
+      ...(option
+        ? {
+            matches: { [option.chain]: { sku_id: option.sku_id, confidence: 1, user_pinned: true, preferred: true } },
+            _unit_cents: option.promo_price_cents ?? option.price_cents,
+          }
+        : {}),
+    };
+    mutateDraft((rows) => [...rows, fresh]);
     if (option) {
-      await upsertRow('match_corrections', {
-        chain_id: option.chain,
-        item_normalised: typed.toLowerCase(),
-        chosen_sku_id: option.sku_id,
-      });
+      setDraftCorrections((c) => [
+        ...c,
+        { chain_id: option.chain, item_normalised: typed.toLowerCase(), chosen_sku_id: option.sku_id },
+      ]);
     }
-    syncNow(['list_items', 'match_corrections']).catch(() => {});
-    // verrijking (hoeveelheid/schap/normalisatie op de gétypte term) — offline
-    // blijft het item gewoon staan; een gekozen producttitel blijft de naam
+    // verrijking (hoeveelheid/normalisatie op de gétypte term) — offline geen punt
     try {
       const res = await authedRequest(`/v1/match?item=${encodeURIComponent(typed)}&chains=${myChains[0]}`);
       if (res.ok) {
         const body = (await res.json()) as {
           item: string; aisle_group_id: number | null; quantity: number | null; unit: string | null;
         };
-        await upsertRow(
-          'list_items',
-          {
-            list_id: listId,
-            ...(option ? {} : { name: body.quantity != null ? body.item : typed }),
-            quantity: body.quantity,
-            unit: body.unit,
-            item_normalised: body.item,
-            aisle_group_id: body.aisle_group_id,
-            is_manual: true,
-          },
-          itemId
+        setDraftItems((rows) =>
+          rows
+            ? rows.map((r) =>
+                r.id === itemId
+                  ? {
+                      ...r,
+                      ...(option ? {} : { name: body.quantity != null ? body.item : typed }),
+                      quantity: body.quantity,
+                      unit: body.unit,
+                      item_normalised: body.item,
+                      aisle_group_id: body.aisle_group_id,
+                    }
+                  : r
+              )
+            : rows
         );
-        await syncNow(['list_items']).catch(() => {});
       }
-    } catch { /* offline: item blijft onder Overig */ }
-    refreshPricing();
+    } catch { /* offline: item blijft staan */ }
   }
 
-  /** productkeuze (cross-chain): de gekozen keten wordt dé keten van dit item,
-   *  en de producttitel wordt de itemnaam. De correctie blijft op de oude
-   *  (ingrediënt-)term staan — daar leert de matcher van. */
-  async function pinProduct(item: ItemRow, option: CrossChainOption) {
+  /** productkeuze (cross-chain): producttitel wordt de itemnaam, keuze in concept. */
+  function pinProduct(item: ItemRow, option: CrossChainOption) {
     const matches: Record<string, MatchEntry> = {};
     for (const [c, entry] of Object.entries(item.matches ?? {})) {
       const { preferred: _preferred, ...rest } = entry;
       matches[c] = rest;
     }
     matches[option.chain] = { sku_id: option.sku_id, confidence: 1, user_pinned: true, preferred: true };
-    await upsertRow('list_items', { list_id: item.list_id, name: option.name, matches }, item.id);
-    await upsertRow('match_corrections', {
-      chain_id: option.chain,
-      item_normalised: item.item_normalised ?? item.name.toLowerCase(),
-      chosen_sku_id: option.sku_id,
-    });
+    const unitCents = option.promo_price_cents ?? option.price_cents;
+    mutateDraft((rows) =>
+      rows.map((r) => (r.id === item.id ? { ...r, name: option.name, matches, _unit_cents: unitCents } : r))
+    );
+    setDraftCorrections((c) => [
+      ...c,
+      {
+        chain_id: option.chain,
+        item_normalised: item.item_normalised ?? item.name.toLowerCase(),
+        chosen_sku_id: option.sku_id,
+      },
+    ]);
     setDetailItem(null);
-    await syncNow(['list_items', 'match_corrections']).catch(() => {});
-    refreshPricing();
   }
 
-  async function removeItem(item: ItemRow) {
+  /** owner: prullenbakje per regel — in het concept, dus altijd te annuleren */
+  function removeItemRow(item: ItemRow) {
+    mutateDraft((rows) => rows.filter((r) => r.id !== item.id));
+    if (detailItem?.id === item.id) setDetailItem(null);
+  }
+
+  /** "Alles bij Aldi" → heel lijstje wisselt naar de producten daar (in concept) */
+  async function convertAllTo(chain: string) {
+    const ok = await confirmDialog({
+      title: `Alles bij ${chainName(chain)}?`,
+      message: 'Elk item wisselt naar het gematchte product daar. Items zonder match blijven zoals ze waren. Niks is definitief tot je op Opslaan tikt.',
+      confirmLabel: 'Wissel',
+    });
+    if (!ok) return;
+    mutateDraft((rows) =>
+      rows.map((r) => {
+        const line = linesByChain.get(chain)?.get(r.id);
+        if (!(line?.matched && line.sku_id)) return r;
+        const matches: Record<string, MatchEntry> = {};
+        for (const [c, entry] of Object.entries(r.matches ?? {})) {
+          const { preferred: _preferred, ...rest } = entry;
+          matches[c] = rest;
+        }
+        matches[chain] = { sku_id: line.sku_id, confidence: 1, user_pinned: true, preferred: true };
+        return {
+          ...r,
+          matches,
+          name: line.product_name ?? r.name,
+          _unit_cents:
+            line.line_price_cents != null ? Math.round(line.line_price_cents / Math.max(1, line.packs ?? 1)) : undefined,
+        };
+      })
+    );
+  }
+
+  function renameItem(item: ItemRow) {
+    const next = nameDraft.trim();
+    if (!next || next === item.name) return;
+    mutateDraft((rows) => rows.map((r) => (r.id === item.id ? { ...r, name: next, item_normalised: null } : r)));
+    setDetailItem((d) => (d && d.id === item.id ? { ...d, name: next, item_normalised: null } : d));
+  }
+
+  function bumpQty(item: ItemRow, delta: number) {
+    const current = Number(item.quantity) || 1;
+    const next = Math.max(1, Math.round((current + delta) * 100) / 100);
+    mutateDraft((rows) => rows.map((r) => (r.id === item.id ? { ...r, quantity: next } : r)));
+    setDetailItem((d) => (d && d.id === item.id ? { ...d, quantity: next } : d));
+  }
+
+  /** Opslaan: het concept wordt de waarheid — diff tegen de opgeslagen staat. */
+  async function saveDraft() {
+    if (!draftItems || !list) return;
+    setSavingDraft(true);
+    try {
+      const base = new Map(items.map((i) => [i.id, i]));
+      for (const d of draftItems) {
+        const b = base.get(d.id);
+        base.delete(d.id);
+        const fields = itemFields(d);
+        if (!b || JSON.stringify(itemFields(b)) !== JSON.stringify(fields)) {
+          await upsertRow('list_items', fields, d.id);
+        }
+      }
+      for (const gone of base.keys()) await deleteRow('list_items', gone);
+      for (const corr of draftCorrections) await upsertRow('match_corrections', corr as unknown as Record<string, unknown>);
+      setDraftItems(null);
+      setDraftCorrections([]);
+      await syncNow(['list_items', 'match_corrections']).catch(() => {});
+      refreshPricing();
+    } finally {
+      setSavingDraft(false);
+    }
+  }
+
+  function cancelDraft() {
+    setDraftItems(null);
+    setDraftCorrections([]);
     setDetailItem(null);
-    await deleteRow('list_items', item.id);
-    syncNow(['list_items']).catch(() => {});
-    refreshPricing();
   }
 
   /** hele lijst weg — met bevestiging; items gaan mee. */
@@ -394,41 +587,57 @@ export default function BoodschappenScreen() {
     await deleteRow('lists', target.id);
     setActiveListId(null);
     setPricing(null);
+    setDraftItems(null);
+    setDraftCorrections([]);
     syncNow(['lists', 'list_items']).catch(() => {});
   }
 
-  /** item hernoemen: user-tekst wint, normalisatie + schap worden opnieuw afgeleid. */
-  async function renameItem(item: ItemRow) {
-    const next = nameDraft.trim();
-    if (!next || next === item.name) return;
-    await upsertRow('list_items', { list_id: item.list_id, name: next, quantity: item.quantity, unit: item.unit }, item.id);
-    setDetailItem({ ...item, name: next, item_normalised: null });
-    syncNow(['list_items']).catch(() => {});
-    try {
-      const res = await authedRequest(`/v1/match?item=${encodeURIComponent(next)}&chains=${myChains[0]}`);
-      if (res.ok) {
-        const body = (await res.json()) as { item: string; aisle_group_id: number | null };
-        await upsertRow(
-          'list_items',
-          { list_id: item.list_id, name: next, item_normalised: body.item, aisle_group_id: body.aisle_group_id },
-          item.id
-        );
-        setDetailItem((d) => (d && d.id === item.id ? { ...d, item_normalised: body.item } : d));
-        await syncNow(['list_items']).catch(() => {});
-        refreshPricing();
-      }
-    } catch {
-      /* offline: naam staat, verrijking volgt */
+  /** bewaar het huidige lijstje als favoriet (lijst zonder datum) */
+  async function saveTemplate() {
+    const name = templateName.trim() || list?.name || 'Mijn lijstje';
+    if (displayItems.length === 0) return;
+    const id = newId();
+    await upsertRow('lists', { name, household_id: await activeHouseholdId() }, id);
+    for (const it of displayItems) {
+      await upsertRow('list_items', { ...itemFields({ ...it, list_id: id, checked: false }) }, newId());
     }
+    setSheet('none');
+    setTemplateName('');
+    syncNow(['lists', 'list_items']).catch(() => {});
+    notice('Lijstje bewaard', `“${name}” staat bij je opgeslagen lijstjes.`);
   }
 
-  async function bumpQty(item: ItemRow, delta: number) {
-    const current = Number(item.quantity) || 1;
-    const next = Math.max(1, Math.round((current + delta) * 100) / 100);
-    await upsertRow('list_items', { list_id: item.list_id, name: item.name, quantity: next, unit: item.unit }, item.id);
-    setDetailItem({ ...item, quantity: next });
-    syncNow(['list_items']).catch(() => {});
-    refreshPricing();
+  /** laad een opgeslagen lijstje in de geselecteerde dag (in concept) */
+  async function loadTemplate(template: ListRow) {
+    const tplItems = itemRows
+      .map((r) => r.row as unknown as ItemRow)
+      .filter((i) => i.list_id === template.id);
+    if (!tplItems.length) {
+      notice('Leeg lijstje', 'Dit opgeslagen lijstje heeft geen items.');
+      return;
+    }
+    const listId = list?.id ?? (await newList(selectedDate));
+    mutateDraft((rows) => [
+      ...rows,
+      ...tplItems.map((it) => ({ ...it, id: newId(), list_id: listId, checked: false, _unit_cents: undefined })),
+    ]);
+    setSheet('none');
+  }
+
+  async function removeTemplate(template: ListRow) {
+    const ok = await confirmDialog({
+      title: 'Opgeslagen lijstje verwijderen?',
+      message: `“${template.name}” verdwijnt uit je opgeslagen lijstjes.`,
+      confirmLabel: 'Verwijderen',
+      destructive: true,
+    });
+    if (!ok) return;
+    const children = itemRows
+      .map((r) => ({ id: r.id, row: r.row as unknown as ItemRow }))
+      .filter((r) => r.row.list_id === template.id);
+    for (const c of children) await deleteRow('list_items', c.id);
+    await deleteRow('lists', template.id);
+    syncNow(['lists', 'list_items']).catch(() => {});
   }
 
   const qtyLabel = (i: ItemRow) =>
@@ -446,6 +655,56 @@ export default function BoodschappenScreen() {
   };
 
   const searching = searchDebounced.length > 0;
+  const templateCount = (t: ListRow) =>
+    itemRows.filter((r) => (r.row as unknown as ItemRow).list_id === t.id).length;
+
+  const itemRowView = (item: ItemRow, idx: number, groupChain: string | null, count: number) => {
+    const chain = chosenChainOf(item, myChains);
+    const cents = chain && !item.checked ? lineCentsAt(item, chain) : null;
+    const line = chain ? linesByChain.get(chain)?.get(item.id) : undefined;
+    const promoActive = !!line?.promo && (line?.promo_savings_cents ?? 0) > 0;
+    const recipes = (item.provenance ?? []).map((p) => p.recipe_title ?? p.title).filter(Boolean);
+    return (
+      <View key={item.id} style={[styles.itemRow, idx < count - 1 && styles.itemBorder]}>
+        <Pressable onPress={() => toggle(item)} hitSlop={6}>
+          <View style={[styles.checkbox, item.checked && styles.checkboxOn]}>
+            {item.checked ? <Check size={12} color={colors.onPrimary} strokeWidth={3} /> : null}
+          </View>
+        </Pressable>
+        <Pressable style={{ flex: 1, minWidth: 0 }} onPress={() => setDetailItem(item)}>
+          <View style={styles.itemNameRow}>
+            <Text style={[styles.itemName, item.checked && styles.checkedText]} numberOfLines={1}>
+              {item.name}
+              {qtyLabel(item)}
+            </Text>
+            {members.length > 1 && item.added_by ? (
+              <View style={styles.byChip}>
+                <Text style={styles.byChipText}>{initialOf(item.added_by)}</Text>
+              </View>
+            ) : null}
+            {recipes.length > 1 ? <Text style={styles.mergedBadge}>{recipes.length} recepten</Text> : null}
+            {promoActive && !item.checked ? <Text style={styles.bonusBadge}>Bonus</Text> : null}
+          </View>
+          {!item.checked && recipes.length && !chain ? (
+            <Text style={styles.subline} numberOfLines={1}>uit: {recipes.join(' + ')}</Text>
+          ) : null}
+        </Pressable>
+        <Pressable onPress={() => setDetailItem(item)} hitSlop={8} style={styles.priceCol}>
+          {chain && cents != null ? (
+            <Text style={[styles.price, item.checked && { color: '#B9C0B2' }]}>{formatEuroCents(cents)}</Text>
+          ) : !item.checked ? (
+            <View style={styles.choosePill}>
+              <Text style={styles.choosePillText}>Kies</Text>
+            </View>
+          ) : null}
+        </Pressable>
+        {/* owner: verwijderen zonder eerst te hoeven openen — en altijd annuleerbaar */}
+        <Pressable onPress={() => removeItemRow(item)} hitSlop={8} accessibilityLabel={`Verwijder ${item.name}`}>
+          <Trash2 size={15} color="#B9C0B2" strokeWidth={2} />
+        </Pressable>
+      </View>
+    );
+  };
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top + 8 }]}>
@@ -470,7 +729,7 @@ export default function BoodschappenScreen() {
               const selected = date === selectedDate;
               const isToday = date === todayIso();
               return (
-                <Pressable key={date} style={styles.weekCell} onPress={() => setSelectedDate(date)}>
+                <Pressable key={date} style={styles.weekCell} onPress={() => selectDay(date)}>
                   <Text style={[styles.weekdayLabel, selected && { color: colors.primary }]}>{DAYS_NL[i]}</Text>
                   <View style={[styles.weekDay, isToday && styles.weekToday, selected && styles.weekSelected]}>
                     <Text style={[styles.weekDayText, selected && { color: colors.onPrimary, fontFamily: fonts.bodyBold }]}>
@@ -486,17 +745,39 @@ export default function BoodschappenScreen() {
 
         <View style={styles.dayHeader}>
           <Text style={styles.dayTitle}>{dutchDate(selectedDate)}</Text>
-          {list ? (
-            <Pressable onPress={() => removeList(list)} hitSlop={10} accessibilityLabel="Lijst verwijderen">
-              <Trash2 size={16} color={colors.danger} strokeWidth={2} />
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+            {displayItems.length > 0 ? (
+              <Pressable
+                onPress={() => { setTemplateName(list?.name ?? ''); setSheet('save'); }}
+                hitSlop={8}
+                accessibilityLabel="Bewaar dit lijstje"
+              >
+                <BookmarkPlus size={17} color={colors.primary} strokeWidth={2} />
+              </Pressable>
+            ) : null}
+            <Pressable onPress={() => setSheet('load')} hitSlop={8} accessibilityLabel="Opgeslagen lijstjes">
+              <Bookmark size={16} color={templates.length ? colors.primary : '#B9C0B2'} strokeWidth={2} />
             </Pressable>
-          ) : null}
+            {list ? (
+              <Pressable onPress={() => removeList(list)} hitSlop={8} accessibilityLabel="Lijst verwijderen">
+                <Trash2 size={16} color={colors.danger} strokeWidth={2} />
+              </Pressable>
+            ) : null}
+          </View>
         </View>
 
         {dayLists.length > 1 ? (
           <View style={styles.tabs}>
             {dayLists.map((l) => (
-              <Pressable key={l.id} onPress={() => setActiveListId(l.id)} style={[styles.tab, list?.id === l.id && styles.tabActive]}>
+              <Pressable
+                key={l.id}
+                onPress={async () => {
+                  if (l.id === list?.id) return;
+                  if (!(await discardDraftGuard())) return;
+                  setActiveListId(l.id);
+                }}
+                style={[styles.tab, list?.id === l.id && styles.tabActive]}
+              >
                 <Text style={[styles.tabText, list?.id === l.id && styles.tabTextActive]}>{l.name}</Text>
               </Pressable>
             ))}
@@ -525,7 +806,6 @@ export default function BoodschappenScreen() {
 
         {searching ? (
           <View style={styles.resultsCard}>
-            {/* zonder keuze kan altijd — kies later, of laat 'm gewoon staan */}
             <Pressable style={styles.plainAddRow} onPress={() => addFromSearch()}>
               <View style={styles.plainAddIcon}>
                 <Plus size={14} color={colors.primary} strokeWidth={2.6} />
@@ -546,105 +826,50 @@ export default function BoodschappenScreen() {
           </View>
         ) : null}
 
-        {list ? (
+        {list || displayItems.length > 0 ? (
           <>
             <Text style={styles.metaLine}>
-              {items.length} items · {checkedCount} afgevinkt
+              {displayItems.length} items · {checkedCount} afgevinkt
               {lastAdded ? ` · laatst: ${lastAdded.who} — ${lastAdded.what}` : ''}
             </Text>
 
-            {groups.length === 0 ? (
+            {chainGroups.length === 0 ? (
               <Text style={[type.meta, { textAlign: 'center', marginTop: 30 }]}>
-                Nog niets op de lijst. Zoek hierboven, of voeg toe vanuit een recept of het weekmenu.
+                Nog niets op de lijst. Zoek hierboven, laad een opgeslagen lijstje, of voeg toe vanuit een recept.
               </Text>
             ) : (
-              groups.map(({ group, items: groupItems }) => (
-                <View key={group.id}>
-                  <Text style={styles.groupTitle}>{group.nameNl}</Text>
+              chainGroups.map(({ chain, items: groupItems, subtotal, priced }) => (
+                <View key={chain ?? 'none'}>
+                  <View style={styles.groupHeader}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
+                      {chain ? chainDot(chain, 18) : null}
+                      <Text style={styles.groupTitle}>{chain ? chainName(chain).toUpperCase() : 'NOG TE KIEZEN'}</Text>
+                    </View>
+                    {chain && priced > 0 ? (
+                      <Text style={styles.groupSubtotal}>{formatEuroCents(subtotal)}</Text>
+                    ) : null}
+                  </View>
                   <View style={styles.groupCard}>
-                    {groupItems.map((item, idx) => {
-                      const chain = chosenChainOf(item, myChains);
-                      const line = lineFor(item, chain);
-                      const pinned = !!chain;
-                      const promoActive = pinned && !!line?.promo && (line?.promo_savings_cents ?? 0) > 0;
-                      const recipes = (item.provenance ?? []).map((p) => p.recipe_title ?? p.title).filter(Boolean);
-                      return (
-                        <View key={item.id} style={[styles.itemRow, idx < groupItems.length - 1 && styles.itemBorder]}>
-                          <Pressable onPress={() => toggle(item)} hitSlop={6}>
-                            <View style={[styles.checkbox, item.checked && styles.checkboxOn]}>
-                              {item.checked ? <Check size={12} color={colors.onPrimary} strokeWidth={3} /> : null}
-                            </View>
-                          </Pressable>
-                          <Pressable style={{ flex: 1, minWidth: 0 }} onPress={() => setDetailItem(item)}>
-                            <View style={styles.itemNameRow}>
-                              <Text style={[styles.itemName, item.checked && styles.checkedText]} numberOfLines={1}>
-                                {item.name}
-                                {qtyLabel(item)}
-                              </Text>
-                              {members.length > 1 && item.added_by ? (
-                                <View style={styles.byChip}>
-                                  <Text style={styles.byChipText}>{initialOf(item.added_by)}</Text>
-                                </View>
-                              ) : null}
-                              {recipes.length > 1 ? (
-                                <Text style={styles.mergedBadge}>{recipes.length} recepten</Text>
-                              ) : null}
-                              {promoActive ? <Text style={styles.bonusBadge}>Bonus</Text> : null}
-                            </View>
-                            {!item.checked ? (
-                              pinned && line?.product_name ? (
-                                <Text style={styles.subline} numberOfLines={1}>
-                                  {/* naam ís meestal al de producttitel — niet dubbel tonen */}
-                                  {line.product_name !== item.name ? `${line.product_name} · ` : ''}
-                                  {chainName(chain!)} · door jou gekozen{line.packs && line.packs > 1 ? ` · ${line.packs}×` : ''}
-                                </Text>
-                              ) : recipes.length ? (
-                                <Text style={styles.subline} numberOfLines={1}>uit: {recipes.join(' + ')}</Text>
-                              ) : null
-                            ) : null}
-                          </Pressable>
-                          {/* de user bepaalt: zonder keuze geen productprijs, wel een duidelijke knop */}
-                          <Pressable onPress={() => setDetailItem(item)} hitSlop={8} style={styles.priceCol}>
-                            {pinned && line?.matched && line.line_price_cents !== undefined ? (
-                              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                                {chainDot(chain!, 16)}
-                                <View style={{ alignItems: 'flex-end', gap: 1 }}>
-                                  {promoActive ? (
-                                    <Text style={styles.oldPrice}>
-                                      {formatEuroCents(line.line_price_cents + (line.promo_savings_cents ?? 0))}
-                                    </Text>
-                                  ) : null}
-                                  <Text style={[styles.price, item.checked && { color: '#B9C0B2' }]}>
-                                    {formatEuroCents(line.line_price_cents)}
-                                  </Text>
-                                </View>
-                              </View>
-                            ) : (
-                              <View style={styles.choosePill}>
-                                <Text style={styles.choosePillText}>Kies</Text>
-                              </View>
-                            )}
-                          </Pressable>
-                        </View>
-                      );
-                    })}
+                    {groupItems.map((item, idx) => itemRowView(item, idx, chain, groupItems.length))}
                   </View>
                 </View>
               ))
             )}
 
-            {/* Waar ga je halen? — de dualiteit: 1 winkel vs slim verdelen */}
+            {/* Waar ga je halen? — tik een complete super aan om ALLES daarheen te wisselen */}
             {storeAdvice ? (
               <View style={{ marginTop: 6 }}>
                 <Text style={styles.groupTitle}>WAAR GA JE HALEN?</Text>
                 <View style={styles.groupCard}>
                   {storeAdvice.singles.map((s, idx) => (
-                    <View
+                    <Pressable
                       key={s.chain_id}
+                      disabled={!s.complete}
+                      onPress={() => convertAllTo(s.chain_id)}
                       style={[
                         styles.adviceRow,
                         (idx < storeAdvice.singles.length - 1 || storeAdvice.split) && styles.itemBorder,
-                        !s.complete && styles.adviceRowGrey, // niet alles verkrijgbaar → grijs, geen (half) totaal
+                        !s.complete && styles.adviceRowGrey,
                       ]}
                     >
                       {chainDot(s.chain_id, 22)}
@@ -655,14 +880,14 @@ export default function BoodschappenScreen() {
                             <Text style={styles.adviceBest}>  · voordeligste</Text>
                           ) : null}
                         </Text>
-                        {!s.complete ? (
-                          <Text style={styles.subline}>
-                            niet alles verkrijgbaar — mist {s.missing} item{s.missing === 1 ? '' : 's'}
-                          </Text>
-                        ) : null}
+                        <Text style={styles.subline}>
+                          {s.complete
+                            ? 'tik om het hele lijstje hierheen te wisselen'
+                            : `niet alles verkrijgbaar — mist ${s.missing} item${s.missing === 1 ? '' : 's'}`}
+                        </Text>
                       </View>
                       <Text style={styles.advicePrice}>{s.complete ? `± ${formatEuroCents(s.total_cents)}` : '—'}</Text>
-                    </View>
+                    </Pressable>
                   ))}
                   {storeAdvice.split ? (
                     <View style={styles.adviceRow}>
@@ -704,12 +929,30 @@ export default function BoodschappenScreen() {
         )}
       </ScrollView>
 
-      {/* totaal: alleen wat de user zelf koos */}
-      {list && items.length > 0 ? (
+      {/* footer: bij een concept wordt dit de Opslaan/Annuleren-balk */}
+      {hasDraft ? (
+        <View style={[styles.footerWrap, { paddingBottom: insets.bottom + 96 }]}>
+          <View style={styles.footerCard}>
+            <View style={{ gap: 2, flex: 1, minWidth: 0 }}>
+              <Text style={styles.footerLabel}>Niet opgeslagen</Text>
+              <Text style={styles.footerTotal}>{formatEuroCents(chosenTotal.cents)}</Text>
+              <Text style={[styles.footerLabel, { color: 'rgba(253,251,246,.75)' }]}>
+                {chosenTotal.open > 0 ? `${chosenTotal.open} nog te kiezen` : 'alles gekozen'}
+              </Text>
+            </View>
+            <Pressable onPress={cancelDraft} style={styles.cancelBtn} disabled={savingDraft}>
+              <Text style={styles.cancelBtnText}>Annuleer</Text>
+            </Pressable>
+            <Pressable onPress={saveDraft} style={styles.saveBtn} disabled={savingDraft}>
+              <Text style={styles.saveBtnText}>{savingDraft ? 'Opslaan…' : 'Opslaan'}</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : list && displayItems.length > 0 ? (
         <View style={[styles.footerWrap, { paddingBottom: insets.bottom + 96 }]}>
           <View style={styles.footerCard}>
             <View style={{ gap: 2, flex: 1 }}>
-              <Text style={styles.footerLabel}>Jouw keuzes ({chosenTotal.chosen} van {items.length})</Text>
+              <Text style={styles.footerLabel}>Jouw keuzes ({chosenTotal.chosen} van {openItems.length})</Text>
               <Text style={styles.footerTotal}>{formatEuroCents(chosenTotal.cents)}</Text>
               <Text style={[styles.footerLabel, { color: 'rgba(253,251,246,.75)' }]}>
                 {chosenTotal.open > 0
@@ -725,7 +968,6 @@ export default function BoodschappenScreen() {
       {detailItem ? (
         <View style={[styles.sheet, { paddingBottom: insets.bottom + 100 }]}>
           <View style={styles.sheetHeader}>
-            {/* naam is bewerkbaar — user-tekst wint, schap/match herleiden mee */}
             <TextInput
               style={styles.nameEdit}
               value={nameDraft}
@@ -751,7 +993,7 @@ export default function BoodschappenScreen() {
                 <Plus size={15} color={colors.text} strokeWidth={2.2} />
               </Pressable>
             </View>
-            <Pressable style={styles.removeBtn} onPress={() => removeItem(detailItem)}>
+            <Pressable style={styles.removeBtn} onPress={() => removeItemRow(detailItem)}>
               <Trash2 size={15} color={colors.danger} strokeWidth={2} />
               <Text style={styles.removeText}>Verwijder</Text>
             </Pressable>
@@ -771,13 +1013,71 @@ export default function BoodschappenScreen() {
           </ScrollView>
         </View>
       ) : null}
+
+      {/* bewaar-sheet: naam kiezen voor het opgeslagen lijstje */}
+      {sheet === 'save' ? (
+        <View style={[styles.sheet, { paddingBottom: insets.bottom + 100 }]}>
+          <View style={styles.sheetHeader}>
+            <Text style={type.h3}>Lijstje bewaren</Text>
+            <Pressable onPress={() => setSheet('none')} hitSlop={10}>
+              <X size={20} color={colors.textSoft} />
+            </Pressable>
+          </View>
+          <Text style={[type.meta, { marginTop: 2 }]}>
+            Bewaar deze {displayItems.length} items als vast lijstje — laad ze later met één tik in een andere dag.
+          </Text>
+          <TextInput
+            style={styles.templateNameInput}
+            placeholder="Naam, bijv. Weekboodschappen basis"
+            placeholderTextColor="#97A08F"
+            value={templateName}
+            onChangeText={setTemplateName}
+            onSubmitEditing={saveTemplate}
+            returnKeyType="done"
+          />
+          <Pressable style={styles.sheetCta} onPress={saveTemplate}>
+            <Text style={styles.sheetCtaText}>Bewaar lijstje</Text>
+          </Pressable>
+        </View>
+      ) : null}
+
+      {/* laad-sheet: kies uit opgeslagen lijstjes */}
+      {sheet === 'load' ? (
+        <View style={[styles.sheet, { paddingBottom: insets.bottom + 100 }]}>
+          <View style={styles.sheetHeader}>
+            <Text style={type.h3}>Opgeslagen lijstjes</Text>
+            <Pressable onPress={() => setSheet('none')} hitSlop={10}>
+              <X size={20} color={colors.textSoft} />
+            </Pressable>
+          </View>
+          {templates.length === 0 ? (
+            <Text style={[type.meta, { paddingVertical: 12 }]}>
+              Nog geen opgeslagen lijstjes. Bewaar er eentje via het bladwijzer-plusje boven je lijst.
+            </Text>
+          ) : (
+            <ScrollView style={{ maxHeight: 340 }} showsVerticalScrollIndicator={false}>
+              {templates.map((t, idx) => (
+                <View key={t.id} style={[styles.templateRow, idx < templates.length - 1 && styles.itemBorder]}>
+                  <Pressable style={{ flex: 1, minWidth: 0 }} onPress={() => loadTemplate(t)}>
+                    <Text style={styles.itemName} numberOfLines={1}>{t.name}</Text>
+                    <Text style={styles.subline}>{templateCount(t)} items · tik om in {dutchDate(selectedDate)} te laden</Text>
+                  </Pressable>
+                  <Pressable onPress={() => removeTemplate(t)} hitSlop={8} accessibilityLabel={`Verwijder ${t.name}`}>
+                    <Trash2 size={15} color="#B9C0B2" strokeWidth={2} />
+                  </Pressable>
+                </View>
+              ))}
+            </ScrollView>
+          )}
+        </View>
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
-  content: { paddingHorizontal: 20, paddingBottom: 220, gap: 10 },
+  content: { paddingHorizontal: 20, paddingBottom: 260, gap: 10 },
   title: { fontFamily: fonts.display, fontSize: 29, lineHeight: 32, color: colors.text },
   weekCard: {
     backgroundColor: colors.surface, borderRadius: 18, padding: 12, gap: 8,
@@ -825,9 +1125,14 @@ const styles = StyleSheet.create({
   metaLine: { fontSize: 12, color: colors.textMuted },
   chainDot: { alignItems: 'center', justifyContent: 'center' },
   chainDotText: { fontFamily: fonts.bodyBold },
-  groupTitle: {
-    fontSize: 11.5, fontFamily: fonts.bodyBold, letterSpacing: 0.6, color: colors.textMuted, marginTop: 8, marginBottom: 7,
+  groupHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginTop: 8, marginBottom: 7, paddingHorizontal: 2,
   },
+  groupTitle: {
+    fontSize: 11.5, fontFamily: fonts.bodyBold, letterSpacing: 0.6, color: colors.textMuted,
+  },
+  groupSubtotal: { fontSize: 12.5, fontFamily: fonts.bodyBold, color: colors.textSoft },
   groupCard: {
     backgroundColor: colors.surface, borderWidth: 1, borderColor: 'rgba(34,48,30,.08)',
     borderRadius: 16, overflow: 'hidden',
@@ -857,7 +1162,6 @@ const styles = StyleSheet.create({
   },
   subline: { fontSize: 10.5, color: '#97A08F', marginTop: 2 },
   priceCol: { alignItems: 'flex-end', gap: 1 },
-  oldPrice: { fontSize: 10.5, color: '#B9C0B2', textDecorationLine: 'line-through' },
   price: { fontSize: 13, fontFamily: fonts.bodySemiBold, color: colors.textSoft },
   choosePill: {
     paddingHorizontal: 11, paddingVertical: 6, borderRadius: radius.pill,
@@ -884,6 +1188,15 @@ const styles = StyleSheet.create({
   },
   footerLabel: { fontSize: 11, color: 'rgba(253,251,246,.6)' },
   footerTotal: { fontSize: 19, fontFamily: fonts.bodyBold, color: '#FDFBF6' },
+  cancelBtn: {
+    paddingHorizontal: 13, paddingVertical: 9, borderRadius: radius.pill,
+    borderWidth: 1, borderColor: 'rgba(253,251,246,.35)',
+  },
+  cancelBtnText: { fontSize: 12.5, fontFamily: fonts.bodySemiBold, color: 'rgba(253,251,246,.85)' },
+  saveBtn: {
+    paddingHorizontal: 16, paddingVertical: 9, borderRadius: radius.pill, backgroundColor: colors.primary,
+  },
+  saveBtnText: { fontSize: 12.5, fontFamily: fonts.bodyBold, color: colors.onPrimary },
   sheet: {
     position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: colors.surface,
     borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: 20, gap: 9,
@@ -910,4 +1223,14 @@ const styles = StyleSheet.create({
   qtyValue: { fontSize: 13, fontFamily: fonts.bodySemiBold, color: colors.text, minWidth: 40, textAlign: 'center' },
   removeBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6, paddingHorizontal: 4 },
   removeText: { fontSize: 12.5, fontFamily: fonts.bodySemiBold, color: colors.danger },
+  templateNameInput: {
+    backgroundColor: colors.bg, borderRadius: 13, paddingHorizontal: 13, paddingVertical: 11,
+    borderWidth: 1, borderColor: 'rgba(34,48,30,.12)', fontSize: 13.5, color: colors.text, marginTop: 4,
+  },
+  templateRow: { flexDirection: 'row', alignItems: 'center', gap: 11, paddingVertical: 11 },
+  sheetCta: {
+    backgroundColor: colors.primary, borderRadius: radius.pill, paddingVertical: 12,
+    alignItems: 'center', marginTop: 4,
+  },
+  sheetCtaText: { fontSize: 14, fontFamily: fonts.bodyBold, color: colors.onPrimary },
 });
