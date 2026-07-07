@@ -8,8 +8,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   CrossChainList,
   CrossChainOptions,
+  ProductOptions,
   useCrossChainOptions,
   type CrossChainOption,
+  type ProductOption,
 } from '../../components/prakkie/ProductOptions';
 import { deleteRow, newId, syncNow, upsertRow, useEntityRows } from '../../data';
 import { authedRequest } from '../../data/api';
@@ -41,8 +43,9 @@ interface ItemRow {
   added_by?: string | null;
   created_at?: string;
   updated_at?: string;
-  /** client-only: stuksprijs van het zojuist gekozen product (draft, nog niet geprijsd door de server) */
-  _unit_cents?: number | null;
+  /** client-only: stuksprijs per keten van net gekozen producten/alternatieven
+   *  (draft — de server heeft deze keuzes nog niet geprijsd) */
+  _alt_cents?: Record<string, number>;
 }
 interface PricedLine {
   item_id: string; matched: boolean; sku_id?: string; product_name?: string;
@@ -115,6 +118,10 @@ export default function BoodschappenScreen() {
   const [savingDraft, setSavingDraft] = useState(false);
   const [sheet, setSheet] = useState<'none' | 'save' | 'load'>('none');
   const [templateName, setTemplateName] = useState('');
+  // grijze "Alles bij X"-rij uitgeklapt: welke keten, en voor welk item de
+  // alternatieven-kiezer openstaat (één tegelijk — anders wordt het een muur)
+  const [expandedChain, setExpandedChain] = useState<string | null>(null);
+  const [resolveItemId, setResolveItemId] = useState<string | null>(null);
 
   // naam-bewerken in de item-sheet: draft volgt het geopende item
   useEffect(() => {
@@ -265,19 +272,18 @@ export default function BoodschappenScreen() {
   const lineCentsAt = useCallback(
     (item: ItemRow, chain: string): number | null => {
       const line = linesByChain.get(chain)?.get(item.id);
+      const alt = item._alt_cents?.[chain];
       if (isCount(item)) {
-        const pinnedHere = chosenChainOf(item, myChains) === chain;
         const unit =
-          pinnedHere && item._unit_cents != null
-            ? item._unit_cents
-            : line?.matched && line.line_price_cents != null
-              ? line.line_price_cents / Math.max(1, line.packs ?? 1)
-              : null;
-        return unit === null ? null : Math.round(unit * countQty(item));
+          alt ??
+          (line?.matched && line.line_price_cents != null
+            ? line.line_price_cents / Math.max(1, line.packs ?? 1)
+            : null);
+        return unit === null || unit === undefined ? null : Math.round(unit * countQty(item));
       }
-      return line?.matched && line.line_price_cents != null ? line.line_price_cents : null;
+      return line?.matched && line.line_price_cents != null ? line.line_price_cents : alt ?? null;
     },
-    [linesByChain, myChains]
+    [linesByChain]
   );
 
   /** alleen betrouwbare regels tellen mee in totalen: gepind of hoge confidence */
@@ -347,13 +353,13 @@ export default function BoodschappenScreen() {
       .filter((c) => linesByChain.has(c))
       .map((c) => {
         let total = 0;
-        let missing = 0;
+        const missingItems: ItemRow[] = [];
         for (const item of openItems) {
           const cents = reliableCentsAt(item, c);
           if (cents != null) total += cents;
-          else missing++;
+          else missingItems.push(item);
         }
-        return { chain_id: c, total_cents: total, missing, complete: missing === 0 };
+        return { chain_id: c, total_cents: total, missing: missingItems.length, missingItems, complete: missingItems.length === 0 };
       })
       .sort((a, b) => Number(b.complete) - Number(a.complete) || a.total_cents - b.total_cents || a.missing - b.missing);
     if (!singles.length) return null;
@@ -430,7 +436,7 @@ export default function BoodschappenScreen() {
       ...(option
         ? {
             matches: { [option.chain]: { sku_id: option.sku_id, confidence: 1, user_pinned: true, preferred: true } },
-            _unit_cents: option.promo_price_cents ?? option.price_cents,
+            _alt_cents: { [option.chain]: option.promo_price_cents ?? option.price_cents },
           }
         : {}),
     };
@@ -478,7 +484,11 @@ export default function BoodschappenScreen() {
     matches[option.chain] = { sku_id: option.sku_id, confidence: 1, user_pinned: true, preferred: true };
     const unitCents = option.promo_price_cents ?? option.price_cents;
     mutateDraft((rows) =>
-      rows.map((r) => (r.id === item.id ? { ...r, name: option.name, matches, _unit_cents: unitCents } : r))
+      rows.map((r) =>
+        r.id === item.id
+          ? { ...r, name: option.name, matches, _alt_cents: { ...(r._alt_cents ?? {}), [option.chain]: unitCents } }
+          : r
+      )
     );
     setDraftCorrections((c) => [
       ...c,
@@ -515,15 +525,39 @@ export default function BoodschappenScreen() {
           matches[c] = rest;
         }
         matches[chain] = { sku_id: line.sku_id, confidence: 1, user_pinned: true, preferred: true };
+        const unitCents =
+          line.line_price_cents != null ? Math.round(line.line_price_cents / Math.max(1, line.packs ?? 1)) : null;
         return {
           ...r,
           matches,
           name: line.product_name ?? r.name,
-          _unit_cents:
-            line.line_price_cents != null ? Math.round(line.line_price_cents / Math.max(1, line.packs ?? 1)) : undefined,
+          ...(unitCents != null ? { _alt_cents: { ...(r._alt_cents ?? {}), [chain]: unitCents } } : {}),
         };
       })
     );
+  }
+
+  /** alternatief kiezen voor een ontbrekend product bij keten X: maakt het item
+   *  daar betrouwbaar-gematcht (pin zónder preferred — de groep van het item
+   *  verandert niet, alleen "Alles bij X" wordt compleet en dus tikbaar). */
+  function resolveAlternative(item: ItemRow, chain: string, option: ProductOption) {
+    const unitCents = option.promo_price_cents ?? option.price_cents;
+    mutateDraft((rows) =>
+      rows.map((r) =>
+        r.id === item.id
+          ? {
+              ...r,
+              matches: { ...(r.matches ?? {}), [chain]: { sku_id: option.sku_id, confidence: 1, user_pinned: true } },
+              _alt_cents: { ...(r._alt_cents ?? {}), [chain]: unitCents },
+            }
+          : r
+      )
+    );
+    setDraftCorrections((c) => [
+      ...c,
+      { chain_id: chain, item_normalised: item.item_normalised ?? item.name.toLowerCase(), chosen_sku_id: option.sku_id },
+    ]);
+    setResolveItemId(null);
   }
 
   function renameItem(item: ItemRow) {
@@ -619,7 +653,7 @@ export default function BoodschappenScreen() {
     const listId = list?.id ?? (await newList(selectedDate));
     mutateDraft((rows) => [
       ...rows,
-      ...tplItems.map((it) => ({ ...it, id: newId(), list_id: listId, checked: false, _unit_cents: undefined })),
+      ...tplItems.map((it) => ({ ...it, id: newId(), list_id: listId, checked: false, _alt_cents: undefined })),
     ]);
     setSheet('none');
   }
@@ -862,32 +896,64 @@ export default function BoodschappenScreen() {
                 <Text style={styles.groupTitle}>WAAR GA JE HALEN?</Text>
                 <View style={styles.groupCard}>
                   {storeAdvice.singles.map((s, idx) => (
-                    <Pressable
-                      key={s.chain_id}
-                      disabled={!s.complete}
-                      onPress={() => convertAllTo(s.chain_id)}
-                      style={[
-                        styles.adviceRow,
-                        (idx < storeAdvice.singles.length - 1 || storeAdvice.split) && styles.itemBorder,
-                        !s.complete && styles.adviceRowGrey,
-                      ]}
-                    >
-                      {chainDot(s.chain_id, 22)}
-                      <View style={{ flex: 1, minWidth: 0 }}>
-                        <Text style={styles.adviceName}>
-                          Alles bij {chainName(s.chain_id)}
-                          {storeAdvice.best && s.chain_id === storeAdvice.best.chain_id ? (
-                            <Text style={styles.adviceBest}>  · voordeligste</Text>
-                          ) : null}
-                        </Text>
-                        <Text style={styles.subline}>
-                          {s.complete
-                            ? 'tik om het hele lijstje hierheen te wisselen'
-                            : `niet alles verkrijgbaar — mist ${s.missing} item${s.missing === 1 ? '' : 's'}`}
-                        </Text>
-                      </View>
-                      <Text style={styles.advicePrice}>{s.complete ? `± ${formatEuroCents(s.total_cents)}` : '—'}</Text>
-                    </Pressable>
+                    <View key={s.chain_id}>
+                      <Pressable
+                        onPress={() =>
+                          s.complete
+                            ? convertAllTo(s.chain_id)
+                            : (setExpandedChain(expandedChain === s.chain_id ? null : s.chain_id), setResolveItemId(null))
+                        }
+                        style={[
+                          styles.adviceRow,
+                          (idx < storeAdvice.singles.length - 1 || storeAdvice.split) && styles.itemBorder,
+                          !s.complete && styles.adviceRowGrey,
+                        ]}
+                      >
+                        {chainDot(s.chain_id, 22)}
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                          <Text style={styles.adviceName}>
+                            Alles bij {chainName(s.chain_id)}
+                            {storeAdvice.best && s.chain_id === storeAdvice.best.chain_id ? (
+                              <Text style={styles.adviceBest}>  · voordeligste</Text>
+                            ) : null}
+                          </Text>
+                          <Text style={styles.subline}>
+                            {s.complete
+                              ? 'tik om het hele lijstje hierheen te wisselen'
+                              : `${s.missing} product${s.missing === 1 ? '' : 'en'} ontbreek${s.missing === 1 ? 't' : 'en'} — tik om alternatieven te kiezen`}
+                          </Text>
+                        </View>
+                        <Text style={styles.advicePrice}>{s.complete ? `± ${formatEuroCents(s.total_cents)}` : '—'}</Text>
+                      </Pressable>
+                      {/* uitgeklapt: per ontbrekend product de app-suggesties bij deze super */}
+                      {!s.complete && expandedChain === s.chain_id ? (
+                        <View style={styles.missingWrap}>
+                          {s.missingItems.map((mi) => (
+                            <View key={mi.id} style={styles.missingItem}>
+                              <Pressable
+                                style={styles.missingHeader}
+                                onPress={() => setResolveItemId(resolveItemId === mi.id ? null : mi.id)}
+                              >
+                                <Text style={styles.missingName} numberOfLines={1}>{mi.name}</Text>
+                                <Text style={styles.missingCta}>
+                                  {resolveItemId === mi.id ? 'sluit' : 'kies alternatief'}
+                                </Text>
+                              </Pressable>
+                              {resolveItemId === mi.id ? (
+                                <ProductOptions
+                                  term={mi.item_normalised ?? mi.name}
+                                  chain={s.chain_id}
+                                  currentSku={mi.matches?.[s.chain_id]?.user_pinned ? mi.matches[s.chain_id]!.sku_id : null}
+                                  onPick={(o) => resolveAlternative(mi, s.chain_id, o)}
+                                  maxRows={3}
+                                  searchable={false}
+                                />
+                              ) : null}
+                            </View>
+                          ))}
+                        </View>
+                      ) : null}
+                    </View>
                   ))}
                   {storeAdvice.split ? (
                     <View style={styles.adviceRow}>
@@ -1169,7 +1235,15 @@ const styles = StyleSheet.create({
   },
   choosePillText: { fontSize: 11.5, fontFamily: fonts.bodyBold, color: colors.primary },
   adviceRow: { flexDirection: 'row', alignItems: 'center', gap: 11, paddingHorizontal: 14, paddingVertical: 11 },
-  adviceRowGrey: { opacity: 0.45 },
+  adviceRowGrey: { opacity: 0.55 },
+  missingWrap: {
+    backgroundColor: colors.bg, borderBottomWidth: 1, borderBottomColor: 'rgba(34,48,30,.06)',
+    paddingHorizontal: 14, paddingVertical: 4,
+  },
+  missingItem: { paddingVertical: 4 },
+  missingHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, paddingVertical: 5 },
+  missingName: { flex: 1, fontSize: 12.5, color: colors.text },
+  missingCta: { fontSize: 11, fontFamily: fonts.bodyBold, color: colors.primary },
   adviceName: { fontSize: 13.5, color: colors.text, fontFamily: fonts.bodySemiBold },
   adviceBest: { fontSize: 10.5, color: colors.primary, fontFamily: fonts.bodyBold },
   adviceSave: { fontSize: 10.5, color: colors.primary, fontFamily: fonts.bodyBold },

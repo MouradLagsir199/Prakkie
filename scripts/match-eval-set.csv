@@ -93,3 +93,4 @@ kookroom,kookroom,
 sperziebonen,sperziebonen|haricots verts,\b(blik|gebroken|salade|schotel|maaltijd)\b
 bietjes,\bbiet(en|jes)?\b,\b(salade|chips|sap)\b
 mais,mais,\b(chips|wafel|brood)\b
+boter,roomboter|margarine|halvarine,\b(zakjes|popcorn|cake|spray|mix|snoep)\b
