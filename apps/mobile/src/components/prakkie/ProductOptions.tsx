@@ -22,8 +22,8 @@ export interface ProductOption {
   promo_price_cents?: number | null;
   image_url?: string | null;
   confidence?: number;
-  /** herkomst van de match: eigen correctie > lexicon-hint > fuzzy */
-  source?: 'correction' | 'lexicon' | 'trgm';
+  /** herkomst van de match: eigen correctie > lexicon-hint > fuzzy/beeld */
+  source?: 'correction' | 'lexicon' | 'trgm' | 'image';
   /** inhoud/gewicht — 300 g sandwichspread is geen 450 g */
   pack_size_value?: number | null;
   pack_size_unit?: string | null;
@@ -75,13 +75,14 @@ export interface CrossChainOption extends ProductOption {
 // sperziebonen" (0.68, penalty gehad) alsnog rang 2 omdat er weinig aanbod is
 // — het gat met de top (0.90) verraadt dat het een mindere match is.
 const BAND1_PER_CHAIN = 3;
-const BAND1_MIN_CONF = 0.55; // trgm ≤ 0.9, lexicon 0.95, correctie 1.0
+const BAND1_MIN_CONF = 0.55; // trgm/beeld ≤ 0.9, lexicon 0.95, correctie 1.0
 const BAND1_MAX_GAP = 0.15; // t.o.v. de beste match binnen dezelfde keten
 const bandOf = (
   o: { source?: string; rank: number; confidence?: number },
   chainTopConf: number
 ): 1 | 2 =>
-  o.source !== 'trgm' ||
+  o.source === 'correction' ||
+  o.source === 'lexicon' ||
   (o.rank < BAND1_PER_CHAIN && (o.confidence ?? 0) >= BAND1_MIN_CONF && (o.confidence ?? 0) >= chainTopConf - BAND1_MAX_GAP)
     ? 1
     : 2;

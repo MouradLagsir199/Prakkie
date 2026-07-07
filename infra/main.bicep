@@ -104,6 +104,15 @@ module rbac 'modules/rbac.bicep' = {
   }
 }
 
+module vision 'modules/vision.bicep' = {
+  scope: rg
+  name: 'vision'
+  params: {
+    env: env
+    location: location
+  }
+}
+
 module staticWebApp 'modules/staticwebapp.bicep' = {
   scope: rg
   name: 'staticwebapp'

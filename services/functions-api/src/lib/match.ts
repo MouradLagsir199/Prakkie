@@ -25,7 +25,7 @@ export interface MatchCandidate {
   product_url: string | null;
   aisle_group_id: number | null;
   confidence: number;
-  source: 'correction' | 'lexicon' | 'trgm';
+  source: 'correction' | 'lexicon' | 'trgm' | 'image';
 }
 
 export interface ChainMatch {
@@ -144,6 +144,92 @@ WHERE p.available
 ORDER BY p.chain_id, p.sku_id,
          CASE r.source WHEN 'correction' THEN 0 WHEN 'lexicon' THEN 1 ELSE 2 END`;
 
+// ---- beeld-tier (0015): zelfde product, andere winkelnaam ("Duo Penotti" bij
+// AH = "Duopasta" bij Aldi) — de fóto's lijken wél. Ná trgm: heeft een keten
+// geen overtuigende kandidaat maar een andere keten wél, dan zoeken we met de
+// foto-embedding van die sterke match (het "anker") de meest gelijkende
+// producten bij de zwakke keten. Puur additief; faalt stil.
+// IJkpunten (gemeten): zelfde-product-kloon 0.785; ongerelateerd ~0.57-0.63.
+// gekalibreerd op de dev-catalogus (penotti-casus): exacte naam-match op een
+// lange query haalt maar ~0.68 (coverage-term), dus anker vanaf 0.65; en bij
+// sim 0.72 zit al ruis ("Vanille roomijs"), Duopasta-kloon zit op 0.785 → 0.74
+const IMAGE_ANCHOR_MIN_CONF = 0.65; // alleen overtuigende matches zijn anker
+const IMAGE_WEAK_MAX_CONF = 0.6; // onder dit niveau mag beeld bijspringen
+const IMAGE_MIN_SIM = 0.74; // cosine-drempel: daaronder is het ruis
+const IMAGE_MAX_ANCHORS = 2;
+const IMAGE_LIMIT = 8;
+
+const IMAGE_ANN_SQL = `
+SELECT p.chain_id, p.sku_id, p.name, p.brand, p.price_cents, p.promo_price_cents, p.promo,
+       p.unit_price_cents_per_std, p.std_unit, p.pack_size_value, p.pack_size_unit,
+       p.image_url, p.product_url, p.aisle_group_id,
+       1 - (e.embedding <=> (SELECT embedding FROM catalog.product_image_embeddings WHERE chain_id = $1 AND sku_id = $2)) AS sim
+FROM catalog.product_image_embeddings e
+JOIN catalog.products p ON p.chain_id = e.chain_id AND p.sku_id = e.sku_id
+WHERE e.chain_id = $3 AND p.available
+ORDER BY e.embedding <=> (SELECT embedding FROM catalog.product_image_embeddings WHERE chain_id = $1 AND sku_id = $2)
+LIMIT $4`;
+
+/** cosine [0.74..0.95] → confidence [0.55..0.85]: sterk beeld verslaat zwakke
+ *  trgm-ruis, maar nooit correcties/hints en zelden een echte naam-match */
+const imageConfidence = (sim: number) => Math.min(0.85, 0.55 + ((sim - IMAGE_MIN_SIM) / 0.21) * 0.3);
+
+async function imageTier(
+  client: Queryable | undefined,
+  result: Record<string, ChainMatch>,
+  chainIds: string[]
+): Promise<void> {
+  const q = client ?? { query };
+  const anchors = chainIds
+    .map((c) => result[c]?.best)
+    .filter((b): b is MatchCandidate => !!b && b.confidence >= IMAGE_ANCHOR_MIN_CONF)
+    .sort((a, b) => b.confidence - a.confidence)
+    .slice(0, IMAGE_MAX_ANCHORS);
+  const weak = chainIds.filter((c) => {
+    const b = result[c]?.best;
+    return !b || b.confidence < IMAGE_WEAK_MAX_CONF;
+  });
+  if (!anchors.length || !weak.length) return;
+
+  // alleen ankers waarvan de foto al geëmbed is (backfill is incrementeel)
+  const withEmbedding = await q.query(
+    `SELECT chain_id, sku_id FROM catalog.product_image_embeddings
+     WHERE (chain_id, sku_id) IN (${anchors.map((_, i) => `($${2 * i + 1}, $${2 * i + 2})`).join(',')})`,
+    anchors.flatMap((a) => [a.chain_id, a.sku_id])
+  );
+  const embedded = new Set(
+    (withEmbedding.rows as { chain_id: string; sku_id: string }[]).map((r) => `${r.chain_id}:${r.sku_id}`)
+  );
+  const usable = anchors.filter((a) => embedded.has(`${a.chain_id}:${a.sku_id}`));
+  if (!usable.length) return;
+
+  for (const chain of weak) {
+    const bySku = new Map<string, MatchCandidate & { sim: number }>();
+    for (const anchor of usable) {
+      const r = await q.query(IMAGE_ANN_SQL, [anchor.chain_id, anchor.sku_id, chain, IMAGE_LIMIT]);
+      for (const row of r.rows as (MatchCandidate & { sim: number | string })[]) {
+        const sim = Number(row.sim);
+        if (!(sim >= IMAGE_MIN_SIM)) continue;
+        const existing = bySku.get(row.sku_id);
+        if (!existing || sim > existing.sim) bySku.set(row.sku_id, { ...row, sim });
+      }
+    }
+    if (!bySku.size) continue;
+    const shortlistSkus = new Set(result[chain]?.shortlist.map((c) => c.sku_id) ?? []);
+    const candidates = [...bySku.values()]
+      .filter((c) => !shortlistSkus.has(c.sku_id))
+      .map(({ sim, ...c }) => ({ ...c, confidence: imageConfidence(sim), source: 'image' as const }))
+      .sort((a, b) => b.confidence - a.confidence);
+    if (!candidates.length) continue;
+    const merged = [...(result[chain]?.shortlist ?? []), ...candidates].sort(
+      (a, b) => sourceRank[a.source] - sourceRank[b.source] || b.confidence - a.confidence
+    );
+    result[chain] = { best: merged[0] ?? null, shortlist: merged.slice(0, SHORTLIST_SIZE) };
+  }
+}
+
+const sourceRank = { correction: 0, lexicon: 1, trgm: 2, image: 2 }; // beeld concurreert met trgm op confidence
+
 /** Match one normalised item across chains. */
 export async function matchItem(
   item: string,
@@ -172,7 +258,6 @@ export async function matchItem(
   }
 
   const result: Record<string, ChainMatch> = {};
-  const sourceRank = { correction: 0, lexicon: 1, trgm: 2 };
   for (const chainId of chainIds) {
     const candidates = (byChain[chainId] ?? []).sort(
       (a, b) => sourceRank[a.source] - sourceRank[b.source] || b.confidence - a.confidence
@@ -182,6 +267,15 @@ export async function matchItem(
       best,
       shortlist: candidates.slice(0, SHORTLIST_SIZE),
     };
+  }
+
+  // beeld-brug: zwakke ketens aanvullen via foto-gelijkenis met sterke ketens.
+  // Additief en fail-safe — een kapotte Vision/embedding-tabel breekt nooit de match.
+  try {
+    await imageTier(client, result, chainIds);
+  } catch (err) {
+    // beeld-tier is additief: nooit de match breken, wel zichtbaar in de logs
+    console.error('image-tier overgeslagen:', err instanceof Error ? err.message : err);
   }
   return result;
 }

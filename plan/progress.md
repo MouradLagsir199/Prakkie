@@ -205,6 +205,15 @@
 - [x] Seeder-guard: blik/gebroken/gedroogd/ingelegd in DISH_WORDS (nooit een blik-variant als rank-1-hint); eval +3 rijen (sperziebonen, bietjes, mais-canary — NL vers = "Suikermais").
 - [x] Leer-loop = het populariteitsmechanisme: keuze → correctie (direct band 1 voor jou) → nachtconsensus ≥3 → lexicon-hint (band 1 voor iedereen). votes-boost in SQL bewust uitgesteld (dubbeltelling + dun signaal).
 
+## Beeld-embeddings als matcher-tier (2026-07-07, owner-idee)
+
+- [x] Probleem: zelfde product, andere winkelnaam ("Duo Penotti" @ AH = "Duopasta" @ Aldi) — trgm kansloos (word_similarity 0.25), maar de fóto's lijken wel. Lakmoesproef Azure AI Vision multimodal embeddings (Florence 1024-dim): kloon-paar cosine **0.785**, ongerelateerd ~0.57–0.63 → signaal bruikbaar, drempel 0.70.
+- [x] Infra: `vis-prakkie-dev` (ComputerVision S1, westeurope) + bicep-module; key/endpoint in KV (VISION-API-KEY/-ENDPOINT). Kosten: ~$0.10/1k foto's; volledige backfill 86k ≈ $9 eenmalig.
+- [x] Migratie 0016 `catalog.product_image_embeddings` (vector(1024), image_url_hash voor incrementeel her-embedden, HNSW cosine). NB: 0015 wilde `product_embeddings` maken maar die naam bestond al sinds 0002 (lege tékst-variant, 512-dim) — 0015 is teruggebracht tot grants.
+- [x] `scripts/embed-product-images.mjs`: hervatbare backfill (skip bij ongewijzigde image_url-hash), 6 parallel, retry/backoff, --chain/--limit/--dry.
+- [x] Matcher image-tier (match.ts): ná trgm — ketens zonder overtuigende kandidaat (best < 0.60) krijgen ANN-kandidaten op basis van de foto-ankers van sterke ketens (best ≥ 0.72, max 2). Cosine ≥ 0.70 → source 'image', confidence [0.55..0.85] (nooit boven correcties/hints). Fail-safe try/catch: kapotte Vision/embeddings breken nooit de match.
+- [x] Client: source-union + bandOf herzien (band 1 = correction|lexicon; image volgt rang/confidence-regels net als trgm).
+
 ## Boodschappen v3 (2026-07-07) — draft/Opslaan, per-super groepen, favorieten, bulk-wissel
 
 - [x] **Draft-model**: elke lijst-bewerking (toevoegen, verwijderen, hernoemen, aantal, productkeuze, bulk-wissel, lijstje laden) is een concept tot Opslaan; Annuleren gooit alles weg; dag/lijst-wissel met openstaand concept vraagt bevestiging. Afvinken blijft direct (winkel-modus). Correcties voor de matcher gaan pas mee bij Opslaan.
