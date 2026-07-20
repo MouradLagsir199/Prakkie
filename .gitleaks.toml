@@ -1,0 +1,21 @@
+# gitleaks config for the PR workflow (.github/workflows/pr.yml).
+# Extends the default ruleset and allowlists a few values that match the
+# generic-api-key heuristic but are NOT secrets — they are public constants
+# that legitimately live in source.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Public, non-secret constants (Azure built-in role GUIDs, a public web-gateway key)"
+regexTarget = "match"
+regexes = [
+  # DekaMarkt's public web gateway key — shipped in their own website frontend,
+  # not a Prakkie credential. Used by scrapers/dekamarkt.py.
+  '''6d3a42a3-6d93-4f98-838d-bcc0ab2307fd''',
+  # Azure built-in roleDefinition GUIDs (identical for every tenant, documented
+  # by Microsoft). Referenced in infra/modules/*.bicep.
+  '''4633458b-17de-408a-b874-0445c86b69e6''', # Key Vault Secrets User
+  '''ba92f5b4-2d11-453d-a403-e96b0029c9fe''', # Storage Blob Data Contributor
+  '''7f951dda-4ed3-4680-a7ca-43fe172d538d''', # AcrPull
+  '''974c5e8b-45b9-4653-ba55-5f855dd0fb88''', # Storage Queue Data Contributor
+]
