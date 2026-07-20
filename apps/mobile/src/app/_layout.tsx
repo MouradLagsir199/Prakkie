@@ -7,11 +7,30 @@ import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import { useEffect } from 'react';
 import { AppState, Platform } from 'react-native';
-import { syncNow } from '../data';
+import { listRows, syncNow } from '../data';
+import { prefetchImages } from '../data/image-prefetch';
 import { kv } from '../data/kv';
 import { colors } from '../theme/tokens';
 
 SplashScreen.preventAutoHideAsync();
+
+/** Productfoto's van de opgeslagen lijst-items — deze staan al lokaal in de
+ *  `matches`-JSON, dus we kunnen ze bij het starten van de app meteen in de
+ *  cache warmen zonder netwerk (owner 2026-07-21: thumbnails instant). */
+async function warmListItemThumbnails(): Promise<void> {
+  try {
+    const rows = await listRows('list_items');
+    const urls: (string | null | undefined)[] = [];
+    for (const { row } of rows) {
+      const matches = (row as { matches?: Record<string, { image_url?: string | null }> }).matches;
+      if (!matches) continue;
+      for (const entry of Object.values(matches)) urls.push(entry?.image_url);
+    }
+    prefetchImages(urls);
+  } catch {
+    /* prefetch is best-effort; nooit de start blokkeren */
+  }
+}
 
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({
@@ -28,7 +47,13 @@ export default function RootLayout() {
 
   // offline-first sync: on launch and every return to foreground (WS1)
   useEffect(() => {
-    const kick = () => syncNow().catch(() => {}); // offline is a normal state, queue survives
+    // warm de thumbnails direct uit de lokale opslag, en opnieuw zodra de sync
+    // verse items kan hebben binnengehaald (owner 2026-07-21)
+    const kick = () =>
+      syncNow()
+        .catch(() => {}) // offline is a normal state, queue survives
+        .finally(() => void warmListItemThumbnails());
+    void warmListItemThumbnails();
     kick();
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') kick();

@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import type { ProductOption } from '../components/prakkie/ProductOptions';
 import { authedRequest, onIdentityChange } from './api';
+import { prefetchImages, resetImagePrefetch } from './image-prefetch';
 import { syncNow } from './index';
 
 /**
@@ -255,7 +256,25 @@ function storeSessionResponse(response: ShoppingSessionResponse): number {
       loaded += 1;
     }
   }
+  // Warm de schijf-cache met precies de foto's die het overzicht straks toont:
+  // de gematchte sku per regel. De Boodschappen-tab warmt de sessie al bij het
+  // openen, dus tegen de tijd dat de user naar het lijst-overzicht gaat staan
+  // de thumbnails al klaar (owner 2026-07-21: "traag ladende thumbnails").
+  prefetchImages(collectPricedLineImages(response.policies.precise ?? []));
   return loaded;
+}
+
+/** De foto van de gematchte sku per regel — dat is wat de lijstregel toont. */
+function collectPricedLineImages(chains: readonly ShoppingChainPricing[]): string[] {
+  const urls: string[] = [];
+  for (const chain of chains) {
+    for (const line of chain.lines) {
+      const chosen =
+        line.alternatives?.find((alt) => alt.sku_id === line.sku_id) ?? line.alternatives?.[0];
+      if (chosen?.image_url) urls.push(chosen.image_url);
+    }
+  }
+  return urls;
 }
 
 function replaceStoredSessionResponse(response: ShoppingSessionResponse): number {
@@ -916,4 +935,7 @@ export function useShoppingSessionCache(): ShoppingSessionCacheSnapshot {
 }
 
 // A different signed-in identity must never observe the prior user's memory.
-onIdentityChange(() => resetShoppingSessionCache());
+onIdentityChange(() => {
+  resetShoppingSessionCache();
+  resetImagePrefetch();
+});

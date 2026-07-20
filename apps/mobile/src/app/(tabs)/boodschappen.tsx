@@ -7,6 +7,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LijstFooter } from '../../components/store/LijstFooter';
 import { ChainLogo } from '../../components/prakkie/ChainLogo';
+import { LoadingBar } from '../../components/prakkie/LoadingBar';
 import { TourTarget } from '../../components/prakkie/OnboardingTour';
 import { getCachedPricing, useShoppingSessionCache, warmShoppingSession } from '../../data/shopping-session-cache';
 import { useStoreDiscover } from '../../store/api';
@@ -311,7 +312,13 @@ export default function BoodschappenHome() {
           </>
         ) : null}
 
-        {!data ? <View style={{ minHeight: 20 }} /> : null}
+        {/* eerste keer openen: verse ontdek-data komt binnen — toon een balk in
+            plaats van een leeg scherm (owner 2026-07-21) */}
+        {!data ? (
+          <View style={{ marginTop: 40, gap: 8 }}>
+            <LoadingBar label="Aanbiedingen en categorieën laden…" />
+          </View>
+        ) : null}
       </ScrollView>
 
       <LijstFooter count={count} lastAdded={lastAdded} aboveTabBar />

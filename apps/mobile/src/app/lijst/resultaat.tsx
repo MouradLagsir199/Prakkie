@@ -20,6 +20,7 @@ import {
 } from '../../components/prakkie/ProductOptions';
 import { ChainLogo } from '../../components/prakkie/ChainLogo';
 import { CTAButton } from '../../components/prakkie/CTAButton';
+import { LoadingBar } from '../../components/prakkie/LoadingBar';
 import { deleteRow, newId, syncNow, upsertRow, useEntityRows } from '../../data';
 import { authedRequest, currentUser } from '../../data/api';
 import { CHAIN_BRAND, chainName } from '../../data/chains';
@@ -192,7 +193,7 @@ export default function ResultaatScreen() {
   const chainsLoaded = selectedChains !== null;
   // Abonnement op de module-cache: een afgeronde Boodschappen-opwarming laat
   // dit scherm direct hertekenen, zonder hier een tweede aanvraag te starten.
-  useShoppingSessionCache();
+  const shoppingCache = useShoppingSessionCache();
   const [detailItem, setDetailItem] = useState<ItemRow | null>(null);
   const [nameDraft, setNameDraft] = useState('');
   const [members, setMembers] = useState<MemberInfo[]>([]);
@@ -1330,7 +1331,14 @@ export default function ResultaatScreen() {
           </View>
         </Pressable>
         {product?.image_url ? (
-          <Image source={{ uri: product.image_url }} style={styles.itemThumb} contentFit="contain" />
+          <Image
+            source={{ uri: product.image_url }}
+            style={styles.itemThumb}
+            contentFit="contain"
+            cachePolicy="memory-disk"
+            recyclingKey={product.sku_id}
+            transition={120}
+          />
         ) : (
           <View style={[styles.itemThumb, styles.itemThumbEmpty]} />
         )}
@@ -1584,6 +1592,13 @@ export default function ResultaatScreen() {
               {checkedCount > 0 ? ` · ${checkedCount} afgevinkt` : ''}
               {lastAdded ? ` · laatst: ${lastAdded.who} — ${lastAdded.what}` : ''}
             </Text>
+
+            {/* eerste inlaadslag (koud, nog geen prijzen): een balk in plaats
+                van een leeg scherm dat op vastlopen lijkt (owner 2026-07-21) */}
+            {displayItems.length > 0 && !pricing &&
+             shoppingCache.status === 'warming' && shoppingCache.listId === list?.id ? (
+              <LoadingBar label="Prijzen en producten voorbereiden…" />
+            ) : null}
 
             {displayItems.length === 0 ? (
               <View style={{ alignItems: 'center', gap: 12, marginTop: 30 }}>
