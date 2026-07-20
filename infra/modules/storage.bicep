@@ -25,8 +25,9 @@ var containerNames = [
   'images'
   'import-cache'
   'gdpr-exports'
-  'db-backups'
+  'db-backups' // index 4: referenced by dbBackupsImmutability — append new names at the end
   'deployments'
+  'openfoodfacts' // OFF-parquet cache voor de ean-enrichment job
 ]
 
 resource containers 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = [

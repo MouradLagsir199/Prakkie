@@ -1,7 +1,14 @@
 import { extractJsonLdRecipe, isoDurationToMinutes } from '@prakkie/shared';
 import { describe, expect, it } from 'vitest';
-import { detectPlatform, failureKind, hasUsableRecipeSignal, type LinkContext } from './context';
-import { buildMessages } from './parse-recipe';
+import { detectPlatform, failureKind, hasUsableRecipeSignal, sourceCaptureOf, type LinkContext } from './context';
+import { buildMessages, normaliseDutchRecipe } from './parse-recipe';
+import {
+  actorFailureMessage,
+  captionTitleHint,
+  extractFacebookPost,
+  isSlowPath,
+  usableSocialTitle,
+} from './platforms';
 
 const base = (over: Partial<LinkContext>): LinkContext => ({
   url: 'https://example.com/r', platform: 'blog', title: null, description: null, image: null,
@@ -21,6 +28,53 @@ describe('detectPlatform (docs/06 §1)', () => {
     ['not a url', 'blog'],
   ];
   for (const [url, platform] of cases) it(`${url} → ${platform}`, () => expect(detectPlatform(url)).toBe(platform));
+});
+
+describe('social/video collection routing', () => {
+  it('always sends every video platform, including YouTube, through the transcript worker', () => {
+    for (const platform of ['instagram', 'tiktok', 'facebook', 'pinterest', 'youtube']) {
+      expect(isSlowPath(platform)).toBe(true);
+    }
+    expect(isSlowPath('blog')).toBe(false);
+  });
+});
+
+describe('social source quality guards', () => {
+  it('rejects platform slogans and derives a concise recipe title from the caption', () => {
+    expect(usableSocialTitle('TikTok - Make Your Day', 'tiktok')).toBeNull();
+    expect(usableSocialTitle('Instagram', 'instagram')).toBeNull();
+    expect(captionTitleHint('Indian spiced cheesey garlic naan wraps🧄\nIngredients:\n- flour')).toBe(
+      'Indian spiced cheesey garlic naan wraps'
+    );
+    expect(captionTitleHint('Creamy Chicken Orzo, rich, hearty, and full of flavor.')).toBe('Creamy Chicken Orzo');
+    expect(captionTitleHint('#recipes #food #easyrecipes')).toBeNull();
+  });
+
+  it('recognises actor failures returned inside a successful dataset response', () => {
+    expect(actorFailureMessage({ status: 'failed', error: 'Usage limit exceeded' })).toBe('Usage limit exceeded');
+    expect(actorFailureMessage({ status: 'success', text: 'ok' })).toBeNull();
+  });
+
+  it('reads Facebook Reel text, thumbnail, author and media metadata from the nested payload', () => {
+    const extracted = extractFacebookPost({
+      message: { text: 'Maak deze snelle pasta.' },
+      short_form_video_context: {
+        video_owner: { name: 'Super Recipes' },
+        video: { first_frame_thumbnail: { uri: 'https://cdn.example/thumb.jpg' } },
+        playback_video: {
+          length_in_second: 88.655,
+          videoDeliveryLegacyFields: { browser_native_sd_url: 'https://cdn.example/video.mp4' },
+        },
+      },
+    });
+    expect(extracted).toEqual({
+      text: 'Maak deze snelle pasta.',
+      image: 'https://cdn.example/thumb.jpg',
+      author: 'Super Recipes',
+      mediaUrl: 'https://cdn.example/video.mp4',
+      durationSeconds: 88.655,
+    });
+  });
 });
 
 describe('JSON-LD extractor (shared, reused by WS7)', () => {
@@ -88,9 +142,50 @@ describe('parseRecipe prompt builder', () => {
     }));
     const user = msgs[1]!.content;
     expect(msgs[0]!.content).toContain('bosui');
+    expect(msgs[0]!.content).toContain('neutral oil');
+    expect(msgs[0]!.content).toContain('1 cup = 240 ml');
+    expect(msgs[0]!.content).toContain('raw_text is óók Nederlands');
     expect(user).toContain('PLATFORM: instagram');
     expect(user).toContain('caption hier');
     expect(user).toContain('transcript hier');
     expect(user).toContain('missing_fields');
+    expect(msgs[0]!.content).toContain('VERZIN OF VUL NIETS AAN');
+    expect(msgs[0]!.content).toContain('note is bij deze eerste import altijd null');
+    expect(msgs[0]!.content).not.toContain('WEL gewenst — AI-SUGGESTIES');
+  });
+
+  it('keeps the exact API capture available for review', () => {
+    const capture = sourceCaptureOf(base({
+      title: 'Pasta uit de bron',
+      description: 'Caption zonder wijzigingen',
+      transcript: 'Doe de pasta in de pan en kook deze acht minuten.'.repeat(2),
+      jsonLd: {
+        name: 'Pasta', description: null, images: [], ingredients: ['200 g pasta'],
+        instructions: ['Kook acht minuten.'], prepMinutes: null, cookMinutes: 8,
+        totalMinutes: 8, recipeYield: null, author: null, nutrition: null,
+      },
+    }));
+    expect(capture.caption).toBe('Caption zonder wijzigingen');
+    expect(capture.structured_ingredients).toEqual(['200 g pasta']);
+    expect(capture.structured_steps).toEqual(['Kook acht minuten.']);
+  });
+});
+
+describe('Dutch ingredient and unit normalisation', () => {
+  it('translates common product terms and converts cups to metric units', () => {
+    const recipe = normaliseDutchRecipe({
+      title: 'Indian spiced garlic naan wraps', source_author: null, images: [], servings_base: 2,
+      time_prep_min: null, time_cook_min: null,
+      ingredients: [
+        { raw_text: '1 cup neutral oil', quantity: 1, unit: 'cup', item_normalised: 'neutral oil', note: null, confidence: 1 },
+        { raw_text: '2 cups all-purpose flour', quantity: 2, unit: 'cups', item_normalised: 'all-purpose flour', note: null, confidence: 1 },
+        { raw_text: '3 garlic cloves', quantity: 3, unit: null, item_normalised: 'garlic', note: null, confidence: 1 },
+      ],
+      steps: [], tags: [], cuisine: null, diet_flags: [], nutrition: null, missing_fields: [],
+    });
+    expect(recipe.title).toContain('Indiaas gekruide');
+    expect(recipe.ingredients[0]).toMatchObject({ quantity: 240, unit: 'ml', item_normalised: 'olie' });
+    expect(recipe.ingredients[1]).toMatchObject({ quantity: 240, unit: 'g', item_normalised: 'tarwebloem' });
+    expect(recipe.ingredients[2]!.item_normalised).toBe('knoflook');
   });
 });

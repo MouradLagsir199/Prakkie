@@ -1,14 +1,16 @@
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
-import { Check, ChevronDown, ChevronUp, Plus, Trash2 } from 'lucide-react-native';
+import { Check, ChevronDown, ChevronUp, Minus, Plus, Sparkles, Trash2 } from 'lucide-react-native';
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { CTAButton } from '../components/prakkie/CTAButton';
 import { newId, syncNow, upsertRow } from '../data';
+import { authedRequest } from '../data/api';
 import { takePendingReview } from '../data/import-flow';
 import type { RecipeRowData } from '../data/recipes';
 import { notice } from '../lib/dialogs';
-import { colors, fonts, radius, type } from '../theme/tokens';
+import { colors, fonts, radius, shadows, type } from '../theme/tokens';
 
 /**
  * Import review — mockup 04 1:1: top bar, green success strip, source line
@@ -28,6 +30,13 @@ export default function ReviewScreen() {
   const [stepsOpen, setStepsOpen] = useState((outcome?.recipe.steps ?? []).length === 0);
   const [editIdx, setEditIdx] = useState<number | null>(null);
   const [stepEditIdx, setStepEditIdx] = useState<number | null>(null);
+  // tijden + missing_fields als state: "Vul het recept aan" mag ze bijwerken
+  const [meta, setMeta] = useState({
+    time_prep_min: outcome?.recipe.time_prep_min ?? null,
+    time_cook_min: outcome?.recipe.time_cook_min ?? null,
+    missing_fields: (outcome?.recipe.missing_fields ?? []) as string[],
+  });
+  const [enriching, setEnriching] = useState(false);
 
   if (!outcome) {
     return (
@@ -40,14 +49,65 @@ export default function ReviewScreen() {
     );
   }
   const r = outcome.recipe;
+  // porties-schaling (owner 2026-07-08): −/+ schaalt de getoonde hoeveelheden
+  // live mee; bij opslaan worden de GESCHAALDE hoeveelheden + gekozen porties
+  // weggeschreven — wat je ziet is wat je bewaart
+  const baseServings = r.servings_base ?? 2;
+  const factor = servings / baseServings;
   const isManual = !r.source_url && outcome.importId === '';
+  const isEditing = outcome.importId === 'edit';
   const platformLabel =
     r.source_platform === 'instagram' ? 'Reel' : r.source_platform === 'tiktok' ? 'TikTok' :
     r.source_platform === 'blog' ? 'Website' : (r.source_platform ?? 'Import');
   const uncertain = (i: { confidence?: number | null }) => (i.confidence ?? 1) < 0.7;
-  const allRecognised = !ingredients.some(uncertain) && (r.missing_fields ?? []).length === 0;
-  // parser gap-fill (I2): steps that weren't in the source are AI suggestions
-  const stepsSuggested = (r.missing_fields ?? []).includes('steps') && steps.length > 0;
+  const allRecognised = !ingredients.some(uncertain) && meta.missing_fields.length === 0;
+  // "Vul het recept aan" (owner 2026-07-10): derde AI-actie — tonen zolang het
+  // recept aantoonbaar gaten heeft (parser-signaal, hoeveelheden of dun stappenplan)
+  const needsEnrich =
+    !isManual &&
+    (meta.missing_fields.length > 0 || steps.length < 3 || ingredients.some((i) => i.quantity == null));
+
+  async function enrich() {
+    if (enriching) return;
+    setEnriching(true);
+    try {
+      const payload = {
+        recipe: {
+          title: title.trim() || r.title || 'Recept',
+          servings_base: baseServings,
+          time_prep_min: meta.time_prep_min,
+          time_cook_min: meta.time_cook_min,
+          ingredients: ingredients.filter((i) => (i.raw_text ?? i.item_normalised ?? '').trim()),
+          steps: steps.filter((s) => s.text.trim()),
+          missing_fields: meta.missing_fields,
+          source_capture: r.source_capture,
+        },
+      };
+      const res = await authedRequest('/v1/recipes/enrich', { method: 'POST', body: JSON.stringify(payload) });
+      const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (res.status === 402) {
+        notice('Aanvul-tegoed op', String(body.message ?? 'Je aanvul-tegoed voor deze maand is op.'));
+        return;
+      }
+      if (!res.ok) throw new Error(String(res.status));
+      const e = body.recipe as RecipeRowData;
+      setIngredients((e.ingredients ?? ingredients).map((ingredient) => ({
+        ...ingredient,
+        note: ingredient.note && /^AI-suggestie\b/i.test(ingredient.note.trim()) ? null : ingredient.note,
+      })));
+      setSteps(e.steps ?? steps);
+      setMeta({
+        time_prep_min: e.time_prep_min ?? meta.time_prep_min,
+        time_cook_min: e.time_cook_min ?? meta.time_cook_min,
+        missing_fields: (e.missing_fields ?? []) as string[],
+      });
+      setStepsOpen(true); // laat meteen zien wat er is aangevuld
+    } catch {
+      notice('Even geen verbinding', 'Aanvullen vereist internet — probeer het zo nog eens.');
+    } finally {
+      setEnriching(false);
+    }
+  }
 
   type Ing = (typeof ingredients)[number];
   function addIngredient() {
@@ -74,8 +134,17 @@ export default function ReviewScreen() {
       notice('Titel ontbreekt', 'Geef het recept een naam.');
       return;
     }
-    // drop rows the user left empty; a recipe needs at least one real ingredient
-    const cleanIngredients = ingredients.filter((i) => (i.raw_text ?? i.item_normalised ?? '').trim());
+    // drop rows the user left empty; a recipe needs at least one real ingredient.
+    // Hoeveelheden geschaald naar de gekozen porties — het scherm toonde ze zo.
+    const cleanIngredients = ingredients
+      .filter((i) => (i.raw_text ?? i.item_normalised ?? '').trim())
+      .map((i) => ({
+        ...i,
+        ...(i.quantity != null ? { quantity: Math.round(i.quantity * factor * 100) / 100 } : {}),
+        // Tijdens review is de herkomstmarkering nuttig. In het uiteindelijke
+        // recept is het gewoon een ingrediënt en hoort die technische tekst er niet bij.
+        note: i.note && !/^AI-suggestie\b/i.test(i.note.trim()) ? i.note : null,
+      }));
     const cleanSteps = steps.filter((s) => s.text.trim()).map((s, j) => ({ ...s, order: j + 1 }));
     if (cleanIngredients.length === 0) {
       notice('Nog geen ingrediënten', 'Voeg minstens één ingrediënt toe.');
@@ -92,37 +161,42 @@ export default function ReviewScreen() {
         source_author: r.source_author ?? null,
         images: r.images ?? [],
         servings_base: servings,
-        time_prep_min: r.time_prep_min ?? null,
-        time_cook_min: r.time_cook_min ?? null,
+        time_prep_min: meta.time_prep_min ?? null,
+        time_cook_min: meta.time_cook_min ?? null,
         ingredients: cleanIngredients,
         steps: cleanSteps,
         tags: r.tags ?? [],
         cuisine: r.cuisine ?? null,
         diet_flags: (r as { diet_flags?: string[] }).diet_flags ?? [],
-        missing_fields: r.missing_fields ?? [],
+        missing_fields: meta.missing_fields,
       },
       id
     );
     syncNow(['recipes']).catch(() => {});
-    router.dismissAll();
-    router.replace('/');
+    if (isEditing) {
+      router.replace(`/recipe/${id}`);
+    } else {
+      router.dismissAll();
+      router.replace('/');
+    }
   }
 
   const heroUrl = (r.images ?? [])[0];
+  const scaleQty = (q: number) => Math.round(q * factor * 100) / 100;
   const qtyLabel = (i: (typeof ingredients)[number]) =>
     i.quantity != null
-      ? `${String(i.quantity).replace('.', ',')}${i.unit ? ` ${i.unit}` : ' st'}`
+      ? `${String(scaleQty(i.quantity)).replace('.', ',')}${i.unit ? ` ${i.unit}` : ' st'}`
       : i.raw_text && i.item_normalised && i.raw_text !== i.item_normalised
         ? ''
         : 'naar smaak';
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top + 6 }]}>
+    <View style={[styles.screen, { paddingTop: insets.top + 16 }]}>
       <View style={styles.topBar}>
         <Pressable onPress={() => router.back()} hitSlop={10}>
           <Text style={styles.cancel}>Annuleer</Text>
         </Pressable>
-        <Text style={styles.topTitle}>Controleer recept</Text>
+        <Text style={styles.topTitle}>{isEditing ? 'Bewerk recept' : 'Controleer recept'}</Text>
         <Text style={[styles.cancel, { opacity: 0 }]}>Annuleer</Text>
       </View>
 
@@ -130,11 +204,13 @@ export default function ReviewScreen() {
         <View style={styles.successStrip}>
           <Check size={15} color={colors.primary} strokeWidth={2.2} />
           <Text style={styles.successText}>
-            {isManual
+            {isEditing
+              ? 'Pas je recept aan en bewaar de wijzigingen'
+              : isManual
               ? 'Nieuw recept — vul titel, ingrediënten en stappen in'
               : outcome.warnings.length
                 ? `Geïmporteerd met ${outcome.warnings.length} aandachtspunt(en) — kijk de gemarkeerde regels na`
-                : 'Geïmporteerd — caption, beeld en structuur gecombineerd'}
+                : 'Recept geïmporteerd — controleer het resultaat'}
           </Text>
         </View>
 
@@ -142,7 +218,7 @@ export default function ReviewScreen() {
           {typeof heroUrl === 'string' && heroUrl ? (
             <Image source={{ uri: heroUrl }} style={styles.thumb} contentFit="cover" />
           ) : (
-            <View style={[styles.thumb, { backgroundColor: '#E7EEDD' }]} />
+            <View style={[styles.thumb, { backgroundColor: colors.badgeBg }]} />
           )}
           <View style={{ flex: 1, gap: 4, minWidth: 0 }}>
             <TextInput style={styles.titleInput} value={title} onChangeText={setTitle} placeholder="Titel" multiline />
@@ -156,31 +232,62 @@ export default function ReviewScreen() {
         </View>
 
         <View style={styles.chipsRow}>
-          <Pressable style={styles.metaChip} onPress={() => setServings(Math.max(1, servings - 1))} onLongPress={() => setServings(servings + 1)}>
+          <View style={styles.servingsStepper}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Minder personen"
+              onPress={() => setServings(Math.max(1, servings - 1))}
+              style={styles.stepBtn}
+              hitSlop={6}
+            >
+              <Minus size={14} color={colors.textSoft} strokeWidth={2.2} />
+            </Pressable>
             <Text style={styles.metaChipText}>{servings} personen</Text>
-          </Pressable>
-          <Pressable style={[styles.metaChip, { paddingHorizontal: 8 }]} onPress={() => setServings(servings + 1)}>
-            <Text style={styles.metaChipText}>+</Text>
-          </Pressable>
-          {r.time_prep_min ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Meer personen"
+              onPress={() => setServings(servings + 1)}
+              style={styles.stepBtn}
+              hitSlop={6}
+            >
+              <Plus size={14} color={colors.textSoft} strokeWidth={2.2} />
+            </Pressable>
+          </View>
+          {meta.time_prep_min ? (
             <View style={styles.metaChip}>
-              <Text style={styles.metaChipText}>{r.time_prep_min} min voorbereiden</Text>
+              <Text style={styles.metaChipText}>{meta.time_prep_min} min voorbereiden</Text>
             </View>
           ) : null}
-          {r.time_cook_min ? (
+          {meta.time_cook_min ? (
             <View style={styles.metaChip}>
-              <Text style={styles.metaChipText}>{r.time_cook_min} min koken</Text>
+              <Text style={styles.metaChipText}>{meta.time_cook_min} min koken</Text>
             </View>
           ) : null}
         </View>
 
-        {(r.missing_fields ?? []).length > 0 && !isManual ? (
+        {meta.missing_fields.length > 0 && !isManual ? (
           <View style={styles.warnStrip}>
             <Text style={styles.warnReason}>
-              Niet in de bron gevonden: {r.missing_fields!.join(', ')}. AI-suggesties zijn amber gemarkeerd —
-              niets wordt stilletjes verzonnen, pas aan waar nodig.
+              Nog aan te vullen: {meta.missing_fields.join(', ')}
             </Text>
           </View>
+        ) : null}
+
+        {needsEnrich ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Vul aan met AI"
+            onPress={enrich}
+            disabled={enriching}
+            style={[styles.enrichBtn, enriching && { opacity: 0.7 }]}
+          >
+            {enriching ? (
+              <ActivityIndicator size="small" color={colors.quota} />
+            ) : (
+              <Sparkles size={16} color={colors.quota} strokeWidth={2.2} />
+            )}
+            <Text style={styles.enrichTitle}>{enriching ? 'Aanvullen…' : 'Vul aan met AI'}</Text>
+          </Pressable>
         ) : null}
 
         <Text style={styles.sectionLabel}>INGREDIËNTEN · {ingredients.length}</Text>
@@ -252,7 +359,6 @@ export default function ReviewScreen() {
         <Pressable style={styles.stepsRow} onPress={() => setStepsOpen(!stepsOpen)}>
           <Text style={styles.stepsTitle}>Bereiding · {steps.length} stappen</Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            {stepsSuggested ? <Text style={styles.checkPill}>AI-suggestie</Text> : null}
             {allRecognised ? (
               <>
                 <Text style={styles.recognised}>Alles herkend</Text>
@@ -264,11 +370,6 @@ export default function ReviewScreen() {
         </Pressable>
         {stepsOpen ? (
           <View style={[styles.card, { marginTop: 8 }]}>
-            {stepsSuggested ? (
-              <Text style={[styles.warnReason, { paddingHorizontal: 14, paddingTop: 10 }]}>
-                De bron had geen stappen — dit is een AI-voorstel. Lees en pas aan.
-              </Text>
-            ) : null}
             {steps.map((s, i) => (
               <Pressable
                 key={i}
@@ -306,9 +407,7 @@ export default function ReviewScreen() {
       </ScrollView>
 
       <View style={[styles.ctaWrap, { paddingBottom: insets.bottom + 26 }]}>
-        <Pressable style={styles.cta} onPress={save}>
-          <Text style={styles.ctaText}>Bewaar in Mijn recepten</Text>
-        </Pressable>
+        <CTAButton label={isEditing ? 'Bewaar wijzigingen' : 'Bewaar in Mijn recepten'} onPress={save} />
       </View>
     </View>
   );
@@ -321,60 +420,69 @@ const styles = StyleSheet.create({
   topTitle: { fontSize: 16, fontFamily: fonts.bodyBold, color: colors.text },
   successStrip: {
     flexDirection: 'row', alignItems: 'center', gap: 9, backgroundColor: colors.badgeBg,
-    borderRadius: 13, paddingHorizontal: 13, paddingVertical: 10,
+    borderRadius: 14, paddingHorizontal: 13, paddingVertical: 10,
   },
-  successText: { flex: 1, fontSize: 12, color: '#3D5138' },
+  successText: { flex: 1, fontSize: 12, color: colors.textSoft },
   headRow: { marginTop: 14, flexDirection: 'row', gap: 12, alignItems: 'center' },
   thumb: { width: 58, height: 58, borderRadius: 14 },
   titleInput: { fontFamily: fonts.display, fontSize: 20, lineHeight: 23, color: colors.text, padding: 0 },
   sourceLine: { fontSize: 11.5, color: colors.textMuted },
   chipsRow: { marginTop: 12, flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   metaChip: {
-    paddingHorizontal: 12, paddingVertical: 7, borderRadius: 10, backgroundColor: colors.surface,
-    borderWidth: 1, borderColor: 'rgba(34,48,30,.12)',
+    paddingHorizontal: 13, paddingVertical: 8, borderRadius: radius.pill, backgroundColor: colors.surface,
+    borderWidth: 1, borderColor: colors.borderControl,
   },
-  metaChipText: { fontSize: 12.5, color: colors.textSoft },
-  warnStrip: { marginTop: 12, backgroundColor: '#FBF0DC', borderRadius: 12, padding: 11 },
-  sectionLabel: {
-    marginTop: 16, fontSize: 12, fontFamily: fonts.bodyBold, letterSpacing: 0.5, color: colors.textMuted,
+  metaChipText: { fontSize: 12.5, fontFamily: fonts.bodySemiBold, color: colors.textSoft },
+  servingsStepper: {
+    flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 5, paddingHorizontal: 7,
+    borderRadius: radius.pill, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.borderControl,
   },
+  stepBtn: {
+    width: 24, height: 24, borderRadius: 12, backgroundColor: colors.surfaceMuted,
+    alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.borderControl,
+  },
+  warnStrip: { marginTop: 12, backgroundColor: colors.plusBgFrom, borderRadius: 14, padding: 11 },
+  enrichBtn: {
+    marginTop: 12, alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: colors.quotaBg, borderWidth: 1, borderColor: colors.quotaBorder,
+    borderRadius: radius.pill, paddingHorizontal: 13, paddingVertical: 9,
+  },
+  enrichTitle: { fontSize: 13.5, fontFamily: fonts.bodySemiBold, color: colors.quota },
+  sectionLabel: { ...type.sectionLabel, marginTop: 16 },
   card: {
-    marginTop: 8, backgroundColor: colors.surface, borderWidth: 1, borderColor: 'rgba(34,48,30,.08)',
-    borderRadius: 16, overflow: 'hidden',
+    marginTop: 8, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.borderSubtle,
+    borderRadius: radius.listCard, overflow: 'hidden',
+    ...shadows.card,
   },
   rowBorder: { borderBottomWidth: 1, borderBottomColor: 'rgba(34,48,30,.06)' },
   rowBorderTop: { borderTopWidth: 1, borderTopColor: 'rgba(34,48,30,.06)' },
   addRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 12 },
   addRowText: { fontSize: 13, fontFamily: fonts.bodySemiBold, color: colors.primary },
-  rawSubline: { fontSize: 11, color: '#97A08F' },
+  rawSubline: { fontSize: 11, color: colors.textMuted2 },
   ingRow: { paddingHorizontal: 14, paddingVertical: 11, gap: 4 },
-  ingWarn: { backgroundColor: '#FBF0DC' },
+  ingWarn: { backgroundColor: colors.plusBgFrom },
   ingTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 },
   ingName: { fontSize: 13.5, color: colors.text, flexShrink: 1 },
   ingQty: { fontSize: 13.5, color: colors.textMuted },
-  ingQtyWarn: { color: '#8A6116', fontFamily: fonts.bodySemiBold },
+  ingQtyWarn: { color: colors.plusText, fontFamily: fonts.bodySemiBold },
   checkPill: {
     paddingHorizontal: 8, paddingVertical: 3, borderRadius: radius.pill, overflow: 'hidden',
-    backgroundColor: '#F1D9A8', color: '#6E4D10', fontSize: 10, fontFamily: fonts.bodyBold,
+    backgroundColor: colors.bonus, color: colors.bonusText, fontSize: 10.5, fontFamily: fonts.bodyBold,
   },
-  warnReason: { fontSize: 11, color: '#8A6116' },
+  warnReason: { fontSize: 11, color: colors.plusText },
   ingEdit: {
-    fontSize: 13.5, color: colors.text, backgroundColor: colors.bg, borderRadius: 8,
+    fontSize: 13.5, color: colors.text, backgroundColor: colors.surfaceMuted, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.borderControl,
     paddingHorizontal: 10, paddingVertical: 7,
   },
   stepsRow: {
     marginTop: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: colors.surface, borderWidth: 1, borderColor: 'rgba(34,48,30,.08)',
-    borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12,
+    backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.borderSubtle,
+    borderRadius: radius.listCard, paddingHorizontal: 14, paddingVertical: 12,
   },
   stepsTitle: { fontSize: 13.5, fontFamily: fonts.bodySemiBold, color: colors.text },
   recognised: { fontSize: 12.5, color: colors.primary, fontFamily: fonts.bodySemiBold },
   stepItem: { flexDirection: 'row', gap: 10, paddingHorizontal: 14, paddingVertical: 10 },
   stepNum: { width: 18, fontSize: 13.5, fontFamily: fonts.bodySemiBold, color: colors.primary },
   ctaWrap: { position: 'absolute', left: 20, right: 20, bottom: 0 },
-  cta: {
-    backgroundColor: colors.primary, borderRadius: 16, paddingVertical: 16, alignItems: 'center',
-    shadowColor: colors.primary, shadowOpacity: 0.35, shadowRadius: 24, shadowOffset: { width: 0, height: 10 }, elevation: 8,
-  },
-  ctaText: { fontSize: 16, fontFamily: fonts.bodySemiBold, color: colors.onPrimary },
 });

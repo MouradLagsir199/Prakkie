@@ -1,3 +1,4 @@
+import { Image } from 'expo-image';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, type } from '../../theme/tokens';
 
@@ -17,12 +18,15 @@ export function ScreenHeader({
   title,
   greetingName,
   avatarInitial,
+  avatarUrl,
   contextLine,
   onAvatarPress,
 }: {
   title: string;
   greetingName?: string;
   avatarInitial?: string;
+  /** profielfoto (owner 2026-07-07): gaat vóór de initiaal als die er is */
+  avatarUrl?: string | null;
   contextLine?: string;
   /** UX-audit C3: avatar is the entrance to /instellingen. */
   onAvatarPress?: () => void;
@@ -38,7 +42,7 @@ export function ScreenHeader({
         <Text style={type.screenTitle}>{title}</Text>
         {contextLine ? <Text style={[type.meta, styles.context]}>{contextLine}</Text> : null}
       </View>
-      {avatarInitial ? (
+      {avatarInitial || avatarUrl ? (
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Instellingen"
@@ -46,7 +50,11 @@ export function ScreenHeader({
           disabled={!onAvatarPress}
           style={styles.avatar}
         >
-          <Text style={styles.avatarText}>{avatarInitial}</Text>
+          {avatarUrl ? (
+            <Image source={{ uri: avatarUrl }} style={styles.avatarImg} contentFit="cover" />
+          ) : (
+            <Text style={styles.avatarText}>{avatarInitial}</Text>
+          )}
         </Pressable>
       ) : null}
     </View>
@@ -67,16 +75,23 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   avatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.primary,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: colors.badgeBg,
+    borderWidth: 1,
+    borderColor: 'rgba(42,95,56,0.15)',
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  avatarImg: {
+    width: 42,
+    height: 42,
   },
   avatarText: {
     fontFamily: 'InstrumentSans_700Bold',
-    fontSize: 16,
-    color: colors.onPrimary,
+    fontSize: 15,
+    color: colors.primary,
   },
 });

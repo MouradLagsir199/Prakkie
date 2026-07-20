@@ -62,7 +62,15 @@ export async function ingestChain(
   chainId: string, // 'dirk' or 'dekamarkt' for the shared detailresult connector
   bronzeLines: AsyncIterable<string> | Iterable<string>,
   /** sweep=false for partial (--limit) ingests so they can't mark the rest of the chain unavailable */
-  options: { sweep?: boolean } = {}
+  options: {
+    sweep?: boolean;
+    /**
+     * One-time, local-admin bootstrap for a brand-new disabled chain. Never
+     * exposed by the function-key HTTP endpoint: a normal disabled chain must
+     * remain a hard kill switch.
+     */
+    allowDisabledBootstrap?: boolean;
+  } = {}
 ): Promise<IngestResult> {
   const pool = getPool();
   const client = await pool.connect();
@@ -72,7 +80,7 @@ export async function ingestChain(
   };
   const startedAt = new Date();
   try {
-    if (!(await chainEnabled(client, chainId))) {
+    if (!(await chainEnabled(client, chainId)) && options.allowDisabledBootstrap !== true) {
       throw new Error(`chain ${chainId} is disabled (kill switch) — refusing to ingest`);
     }
     const categoryMap = await loadCategoryMap(client, chainId);
@@ -117,7 +125,10 @@ export async function ingestChain(
                 unit_price, std_unit, promo, promo_price_cents, promo_valid_to, category_path,
                 aisle_group_id, image_url, product_url, available, content_hash)
          ON CONFLICT (chain_id, sku_id) DO UPDATE SET
-           ean = EXCLUDED.ean, name = EXCLUDED.name, brand = EXCLUDED.brand,
+           -- Scraper-EAN wint (verser), maar een NULL van de scraper mag een
+           -- OFF-verrijkte EAN (catalog.ean_enrichment, 0034) nooit wissen.
+           ean = COALESCE(EXCLUDED.ean, catalog.products.ean),
+           name = EXCLUDED.name, brand = EXCLUDED.brand,
            pack_size_value = EXCLUDED.pack_size_value, pack_size_unit = EXCLUDED.pack_size_unit,
            price_cents = EXCLUDED.price_cents, unit_price_cents_per_std = EXCLUDED.unit_price_cents_per_std,
            std_unit = EXCLUDED.std_unit, promo = EXCLUDED.promo,
@@ -125,7 +136,14 @@ export async function ingestChain(
            category_path = EXCLUDED.category_path, aisle_group_id = EXCLUDED.aisle_group_id,
            image_url = EXCLUDED.image_url, product_url = EXCLUDED.product_url,
            available = EXCLUDED.available, content_hash = EXCLUDED.content_hash,
-           last_seen_at = now(), updated_at = now()`,
+           last_seen_at = now(),
+           -- Keep updated_at semantic: price/name/content changed, not merely
+           -- observed again. Text-embedding backfills use this to avoid paying
+           -- to re-embed the complete catalog after every crawl.
+           updated_at = CASE
+             WHEN catalog.products.content_hash IS DISTINCT FROM EXCLUDED.content_hash THEN now()
+             ELSE catalog.products.updated_at
+           END`,
         [
           chainId,
           batch.map((p) => p.skuId),

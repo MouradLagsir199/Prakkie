@@ -8,7 +8,11 @@
 
 ## 1. Data strategy
 
-Every one of the eleven chains in §2 publishes its product assortment through a public web or app endpoint we can read the way a browser does. **We ingest each chain ourselves** by reverse-engineering those endpoints — there is no third-party price aggregator in the loop.
+Ten chains in §2 publish their product assortment through a public web endpoint
+we can read the way a browser does. Picnic is the single account-bound
+exception and uses its read-only app API. **We ingest each chain ourselves** by
+reverse-engineering those endpoints — there is no third-party price aggregator
+in the loop.
 
 Owning the ingestion is a deliberate choice: it gives us the **full field set** the product needs — pack size, category tree, promotion metadata (Bonus type, mechanic, valid dates), product images, EANs — rather than a lowest-common-denominator feed, and it keeps the entire data pipeline under our control and our own EU hosting. The per-chain access notes in §2 say where each chain's data lives; §4 covers how we pull and refresh it.
 
@@ -24,7 +28,7 @@ These are every Dutch chain with a public priced assortment we can ingest. This 
 | **Jumbo** (jumbo.com) | #2, ~20% share | Mobile REST API (versioned path, unauthenticated for browsing) + public website JSON endpoints; search, product detail, promotions all reachable. Also widely reverse-engineered. | Rich mobile + web JSON; search, product detail and promotions all available. Second pillar of the cross-chain comparison. |
 | **Plus** (plus.nl) | #3 after absorbing Coop | SPA website with JSON backend; full priced webshop. Note: **Coop no longer exists** — merged into Plus (conversion completed 2023/24). Treat old "Coop" sources as legacy. | Full priced webshop with JSON backend. |
 | **Dirk van den Broek** (dirk.nl) | Discounter, price-fighter — important for "cheapest basket" credibility | Public API used by site/app (Detailresult group); known in community projects, returns products incl. prices and offers. | Public Detailresult API; products incl. prices and offers. Key for cheapest-basket credibility. |
-| **DekaMarkt** (dekamarkt.nl) | Regional (Noord-Holland); same parent as Dirk (Detailresult) | Same API family as Dirk — one integration covers both. Limited assortment online (not everything is webshop-listed). | Shares Dirk's Detailresult integration — one connector covers both. Not everything is webshop-listed. |
+| **DekaMarkt** (dekamarkt.nl) | Regional (Noord-Holland); same parent as Dirk (Detailresult) | Detailresult API family, but its own store/gateway configuration and category walk. | Dedicated scraper covers all 146 web groups; the full online assortment is used for basket totals. |
 | **Aldi** (aldi.nl) | Discounter | Website lists products with prices (assortment partially online); app API exists. Weekly "acties" are structured on the site. | Prices on site (assortment partially online); structured weekly "acties". Partial coverage → honest not-in-assortiment UX (§6). |
 | **Vomar** (vomar.nl) | Regional (Randstad/NH) | Full priced webshop; ingestible. | Full priced webshop; straightforward to ingest. |
 | **Hoogvliet** (hoogvliet.com) | Regional (Zuid-Holland) | Full priced webshop (commerce platform with JSON endpoints); ingestible. | Full priced webshop with JSON endpoints. |
@@ -81,7 +85,13 @@ Volume reality check: the entire priced NL assortment across all eleven chains i
 
 ## 6. What this means for the mockups
 
-- **Onboarding chain picker (spec A3):** offer all eleven supported chains.
-- **Prijzen tab (mockup 07):** comparison rows for the user's selected chains; chains with partial online coverage (e.g. Aldi, DekaMarkt, Picnic) show "*n* items niet in assortiment" instead of a fake total. The mockup demonstrates this pattern with a Lidl row — Lidl itself is out of scope, but keep the honest partial-coverage UX for the in-scope chains that need it.
+- **Onboarding chain picker (spec A3):** offer chains with a successfully
+  imported live catalog. Picnic appears only after its first authenticated
+  snapshot; an empty account-bound chain is never exposed.
+- **Prijzen tab (mockup 07):** comparison rows for the user's selected chains;
+  chains with partial online coverage (Aldi and, once activated, Picnic) show
+  "*n* items niet in assortiment" instead of a fake total. The mockup
+  demonstrates this pattern with a Lidl row — Lidl itself is out of scope, but
+  keep the honest partial-coverage UX for the in-scope chains that need it.
 - **Lijst tab (mockup 06):** per-line prices from the user's home chain; footer teaser computed across selected chains.
 - **Bonus badges (mockups 01/05/06/07):** driven by the promotion metadata we ingest per chain (Bonus type, mechanic, valid dates). AH and Jumbo expose the richest mechanics ("1+1 gratis", "t/m zondag", end dates); chains with sparser promo data fall back to a simpler price-drop badge.

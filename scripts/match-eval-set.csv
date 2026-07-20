@@ -94,3 +94,8 @@ sperziebonen,sperziebonen|haricots verts,\b(blik|gebroken|salade|schotel|maaltij
 bietjes,\bbiet(en|jes)?\b,\b(salade|chips|sap)\b
 mais,mais,\b(chips|wafel|brood)\b
 boter,roomboter|margarine|halvarine,\b(zakjes|popcorn|cake|spray|mix|snoep|croissants?|koekjes?|sprits(en)?|biscuits?)\b
+volle melk,volle melk,\b(halfvolle|magere|karnemelk|lactosevrij)\b|\d+ ?[x×] ?\d
+wit brood,\bwit,\b(bruin|volkoren|meergranen)\b
+bruin brood,bruin|volkoren,\bwit\b
+witte rijst,rijst,\b(zilvervlies|risotto|basmati|pandan)\b
+roomboter,roomboter,\b(croissants?|appelflap|flap(pen)?|kano|boterkoek|koek|taart|kaastengel|tengels?|carree|hoef|picolientjes?|zakjes|cheesecake)\b

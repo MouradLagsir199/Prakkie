@@ -7,11 +7,17 @@ import { query } from './db';
  * with confidence + shortlist fallback. pgvector semantic sits behind the same
  * seam once embeddings exist (owner input #6); absent embeddings it degrades
  * to the fuzzy tier. One round-trip matches one item across all chains.
+ *
+ * NB (owner 2026-07-14): dit bestand matcht *ingrediënttermen* aan producten —
+ * dat kan alleen op naam. Product→product (cross-chain, "hetzelfde artikel bij
+ * een andere keten") gaat uitsluitend op EAN-identiteit in pricing.ts; de
+ * vroegere beeld- en anker-naam-tiers zijn verwijderd.
  */
 
 export interface MatchCandidate {
   chain_id: string;
   sku_id: string;
+  ean?: string | null;
   name: string;
   brand: string | null;
   price_cents: number;
@@ -25,7 +31,22 @@ export interface MatchCandidate {
   product_url: string | null;
   aisle_group_id: number | null;
   confidence: number;
-  source: 'correction' | 'lexicon' | 'trgm' | 'image';
+  source: 'ean' | 'correction' | 'lexicon' | 'trgm' | 'semantic';
+  /** "het gezochte product zelf" (canonieke naam eindigt op de term — NL is
+   *  kop-finaal) vs. samengesteld/afgeleid ("roomboter croissant"). Stuurt de
+   *  sortering in de app: eerst de echte varianten op prijs, dan de rest. */
+  is_primary?: boolean;
+  /** AI-intent (0025): de kale kern van wat het product ís ("volle melk") */
+  head_term?: string | null;
+  /** AI-intent (0025): vers|blik|pot|diepvries|gedroogd|houdbaar|bewerkt|non-food */
+  intent_form?: string | null;
+  /** AI-intent (0025): genormaliseerde winkelcategorie/afdeling. */
+  intent_aisle?: number | null;
+  /** AI-intent (0025): basisingrediënt vs samengesteld/kant-en-klaar (soep, saus, gebak) */
+  is_base?: boolean | null;
+  canonical_name?: string | null;
+  canonical_key?: string | null;
+  is_organic?: boolean | null;
 }
 
 export interface ChainMatch {
@@ -74,6 +95,44 @@ const PROCESSED_RX = '\\m(saus|soep|salade|mix|kruidenmix|poeder|drink|snack|chi
 // lijst: diepvries, gesneden, gewassen, geraspt, gekookt (gekookte bietjes is
 // de normale vorm), gezouten. Query "sperziebonen blik" krijgt géén penalty.
 const FORM_RX = '\\m(blik|blikje|blikjes|pot|potje|gebroken|gedroogd|gedroogde|ingelegd|ingelegde|zoetzuur|zoetzure|tafelzuur)\\M';
+// JS-spiegel van FORM_RX voor de is_primary-beslissing: de AI-intent zegt soms
+// 'vers' tegen een pot gebroken sperziebonen, maar het vorm-woord in de
+// productnaam zelf liegt niet (owner 2026-07-08, "gebroken sperziebonen eerst")
+const FORM_WORDS_JS = /\b(blik|blikje|blikjes|pot|potje|gebroken|gedroogd|gedroogde|ingelegd|ingelegde|zoetzuur|zoetzure|tafelzuur)\b/;
+
+// samengesteld-product-markers voor is_primary (owner 2026-07-07 avond):
+// gebak, gerechten en afgeleiden die met het ingrediënt gemáákt zijn maar het
+// ingrediënt niet zíjn. Suffix-match (geen \m-prefix): vangt ook samenstellingen
+// als boterhamZAKJES, eiercakeJES, roomIJS. 'rijst' matcht 'ijs' NIET (de t
+// breekt de woordgrens). Spiegel: DISH_WORDS in scripts/seed-lexicon-hints.mjs.
+const COMPOSITE_RX = new RegExp(
+  '(saus|soep|salade|schotel|maaltijd|mix|poeder|drink|snack|chips|koek|koekjes?|biscuits?' +
+    '|croissants?|spritsen|sprits|taart|vlaai|wafels?|cakejes?|cake|flappen|flap|kano|tengels?' +
+    "|kaastengel|carrees?|hoef|picolientjes?|zakjes?|creme|gebak|ijs|dessert|pizza|burgers?" +
+    '|wraps?|broodjes?|repen|reep|spread|vulling|beleg|smaak|geur|shampoo|spray' +
+    '|krakelingen?|kantjes|vlinders?|stengels?|soesjes?|bolussen?)($|\\s)'
+);
+// interpunctie → spatie: "kano's" moet als woord 'kano' matchen, niet dood op de apostrof
+const foldJs = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+const escRx = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// gesloten klasse kwaliteits-/vorm-bijvoeglijken: mogen in een canoniek naast de
+// term staan zonder dat het een ánder product wordt ("verse roomboter ongezouten",
+// "roomboter goud"). Elk ander rest-zelfstandig-naamwoord ⇒ samengesteld product.
+const ADJ_WORDS = new Set([
+  'gezouten', 'ongezouten', 'vers', 'verse', 'bio', 'biologisch', 'biologische', 'licht', 'lichte',
+  'extra', 'fijn', 'fijne', 'puur', 'pure', 'echt', 'echte', 'goud', 'blend', 'traditioneel',
+  'traditionele', 'ambachtelijk', 'ambachtelijke', 'natuur', 'naturel', 'halfvol', 'halfvolle',
+  'vol', 'volle', 'mager', 'magere', 'houdbaar', 'houdbare', 'gras', 'weide', 'roomboter',
+  'origineel', 'originele', 'klassiek', 'klassieke', 'mini', 'maxi', 'groot', 'grote', 'klein', 'kleine',
+]);
+
+// variant-conflict (owner-bug 2026-07-07): "volle melk" matchte "halfvolle melk"
+// (trgm ziet de substring, niet de betekenis). Noemt de QUERY expliciet één
+// variant uit een groep en het product een ándere, dan is dat een fout product
+// — harde penalty. Query zonder variantwoord ("melk") krijgt níks: dan zijn
+// alle varianten prima. \m..\M is woordgrens: "volle" matcht niet ín "halfvolle".
+const VARIANT_RX = '\\m(volle|halfvolle|magere|lactosevrije?)\\M';
 
 const CANDIDATE_SQL = `
 WITH terms AS (SELECT DISTINCT unnest($1::text[]) AS q),
@@ -108,7 +167,12 @@ fuzzy AS (
            - CASE WHEN public.fold_text(p.name) ~ '${PROCESSED_RX}'
                        AND NOT t.q ~ '${PROCESSED_RX}' THEN 0.22 ELSE 0 END
            - CASE WHEN $7::boolean AND public.fold_text(p.name) ~ '${FORM_RX}'
-                       AND NOT t.q ~ '${FORM_RX}' THEN 0.22 ELSE 0 END AS score
+                       AND NOT t.q ~ '${FORM_RX}' THEN 0.22 ELSE 0 END
+           - CASE WHEN t.q ~ '${VARIANT_RX}'
+                       AND public.fold_text(p.name) ~ '${VARIANT_RX}'
+                       AND substring(t.q from '${VARIANT_RX}')
+                           IS DISTINCT FROM substring(public.fold_text(p.name) from '${VARIANT_RX}')
+                  THEN 0.50 ELSE 0 END AS score
     FROM catalog.products p
     CROSS JOIN terms t
     LEFT JOIN catalog.name_canonical nc
@@ -116,6 +180,24 @@ fuzzy AS (
     WHERE p.chain_id = ANY($2) AND p.available
       AND (t.q <% p.name OR p.name % t.q)
   ) s GROUP BY chain_id, sku_id
+),
+query_vector AS (
+  SELECT embedding FROM catalog.ingredient_lexicon
+  WHERE embedding IS NOT NULL AND (item_normalised = $8 OR $8 = ANY(aliases))
+  LIMIT 1
+),
+semantic AS (
+  SELECT target.chain_id, neighbour.sku_id, neighbour.score
+  FROM unnest($2::text[]) AS target(chain_id)
+  CROSS JOIN query_vector qv
+  CROSS JOIN LATERAL (
+    SELECT pe.sku_id, 1 - (pe.embedding <=> qv.embedding) AS score
+    FROM catalog.product_embeddings pe
+    JOIN catalog.products p ON p.chain_id = pe.chain_id AND p.sku_id = pe.sku_id
+    WHERE pe.chain_id = target.chain_id AND p.available
+    ORDER BY pe.embedding <=> qv.embedding
+    LIMIT $3
+  ) neighbour
 ),
 ranked AS (
   SELECT chain_id, sku_id, score, source, rn FROM (
@@ -130,105 +212,103 @@ ranked AS (
     SELECT f.chain_id, f.sku_id, f.score, 'trgm',
            row_number() OVER (PARTITION BY f.chain_id ORDER BY f.score DESC, f.price_cents ASC)
     FROM fuzzy f
+    UNION ALL
+    SELECT s.chain_id, s.sku_id, s.score, 'semantic',
+           row_number() OVER (PARTITION BY s.chain_id ORDER BY s.score DESC)
+    FROM semantic s
   ) u
   WHERE rn <= $3
 )
 SELECT DISTINCT ON (p.chain_id, p.sku_id)
-       p.chain_id, p.sku_id, p.name, p.brand, p.price_cents, p.promo_price_cents, p.promo,
+       p.chain_id, p.sku_id, p.ean, p.name, p.brand, p.price_cents, p.promo_price_cents, p.promo,
        p.unit_price_cents_per_std, p.std_unit, p.pack_size_value, p.pack_size_unit,
        p.image_url, p.product_url, p.aisle_group_id,
-       r.score AS confidence, r.source
+       r.score AS confidence, r.source,
+       public.fold_text(nc.display_name) AS canonical_name, nc.canonical_key, nc.is_organic,
+       pi.head_term, pi.form AS intent_form, pi.aisle_group_id AS intent_aisle, pi.is_base
 FROM ranked r
 JOIN catalog.products p ON p.chain_id = r.chain_id AND p.sku_id = r.sku_id
+LEFT JOIN catalog.name_canonical nc ON nc.name_search = public.fold_text(p.name)
+LEFT JOIN catalog.product_intent pi ON pi.chain_id = p.chain_id AND pi.sku_id = p.sku_id
 WHERE p.available
 ORDER BY p.chain_id, p.sku_id,
          CASE r.source WHEN 'correction' THEN 0 WHEN 'lexicon' THEN 1 ELSE 2 END`;
 
-// ---- beeld-tier (0015): zelfde product, andere winkelnaam ("Duo Penotti" bij
-// AH = "Duopasta" bij Aldi) — de fóto's lijken wél. Ná trgm: heeft een keten
-// geen overtuigende kandidaat maar een andere keten wél, dan zoeken we met de
-// foto-embedding van die sterke match (het "anker") de meest gelijkende
-// producten bij de zwakke keten. Puur additief; faalt stil.
-// IJkpunten (gemeten): zelfde-product-kloon 0.785; ongerelateerd ~0.57-0.63.
-// gekalibreerd op de dev-catalogus (penotti-casus): exacte naam-match op een
-// lange query haalt maar ~0.68 (coverage-term), dus anker vanaf 0.65; en bij
-// sim 0.72 zit al ruis ("Vanille roomijs"), Duopasta-kloon zit op 0.785 → 0.74
-const IMAGE_ANCHOR_MIN_CONF = 0.65; // alleen overtuigende matches zijn anker
-const IMAGE_WEAK_MAX_CONF = 0.6; // onder dit niveau mag beeld bijspringen
-const IMAGE_MIN_SIM = 0.74; // cosine-drempel: daaronder is het ruis
-const IMAGE_MAX_ANCHORS = 2;
-const IMAGE_LIMIT = 8;
+const sourceRank = { ean: 0, correction: 0, lexicon: 1, trgm: 2, semantic: 2 }; // retrieval tiers compete on confidence
 
-const IMAGE_ANN_SQL = `
-SELECT p.chain_id, p.sku_id, p.name, p.brand, p.price_cents, p.promo_price_cents, p.promo,
-       p.unit_price_cents_per_std, p.std_unit, p.pack_size_value, p.pack_size_unit,
-       p.image_url, p.product_url, p.aisle_group_id,
-       1 - (e.embedding <=> (SELECT embedding FROM catalog.product_image_embeddings WHERE chain_id = $1 AND sku_id = $2)) AS sim
-FROM catalog.product_image_embeddings e
-JOIN catalog.products p ON p.chain_id = e.chain_id AND p.sku_id = e.sku_id
-WHERE e.chain_id = $3 AND p.available
-ORDER BY e.embedding <=> (SELECT embedding FROM catalog.product_image_embeddings WHERE chain_id = $1 AND sku_id = $2)
-LIMIT $4`;
+// One anchored search can merge a specific variant pool ("fuji appels") with
+// its generic product pool ("appels"). Keep the entire merged candidate set
+// available behind "Zie meer"; the UI itself shows only the first three until
+// the user explicitly expands it.
+export const PREVIEW_ALTERNATIVE_LIMIT = 64;
 
-/** cosine [0.74..0.95] → confidence [0.55..0.85]: sterk beeld verslaat zwakke
- *  trgm-ruis, maar nooit correcties/hints en zelden een echte naam-match */
-const imageConfidence = (sim: number) => Math.min(0.85, 0.55 + ((sim - IMAGE_MIN_SIM) / 0.21) * 0.3);
+// ---- gezonde-default-keuze (owner 2026-07-07, "6x200ML bij Alles bij Jumbo") --
+// De shortlist blijft compleet — dit stuurt alleen welke kandidaat de stille
+// default (best) wordt: geen multipack/tray tenzij de query erom vraagt, en
+// mét een benodigde hoeveelheid wint het pak dat daar qua maat bij past.
 
-async function imageTier(
-  client: Queryable | undefined,
-  result: Record<string, ChainMatch>,
-  chainIds: string[]
-): Promise<void> {
-  const q = client ?? { query };
-  const anchors = chainIds
-    .map((c) => result[c]?.best)
-    .filter((b): b is MatchCandidate => !!b && b.confidence >= IMAGE_ANCHOR_MIN_CONF)
-    .sort((a, b) => b.confidence - a.confidence)
-    .slice(0, IMAGE_MAX_ANCHORS);
-  const weak = chainIds.filter((c) => {
-    const b = result[c]?.best;
-    return !b || b.confidence < IMAGE_WEAK_MAX_CONF;
-  });
-  if (!anchors.length || !weak.length) return;
+const MULTIPACK_RX = /\d+\s*[x×]\s*\d+/i;
+const PACK_TO_BASE: Record<string, { f: number; u: string }> = {
+  g: { f: 1, u: 'g' }, kg: { f: 1000, u: 'g' }, ml: { f: 1, u: 'ml' }, l: { f: 1000, u: 'ml' },
+  st: { f: 1, u: 'st' }, stuk: { f: 1, u: 'st' }, stuks: { f: 1, u: 'st' },
+};
+const candidateBase = (c: MatchCandidate): { value: number; unit: string } | null => {
+  if (c.pack_size_value === null || !c.pack_size_unit) return null;
+  const m = PACK_TO_BASE[c.pack_size_unit];
+  return m ? { value: Number(c.pack_size_value) * m.f, unit: m.u } : null;
+};
 
-  // alleen ankers waarvan de foto al geëmbed is (backfill is incrementeel)
-  const withEmbedding = await q.query(
-    `SELECT chain_id, sku_id FROM catalog.product_image_embeddings
-     WHERE (chain_id, sku_id) IN (${anchors.map((_, i) => `($${2 * i + 1}, $${2 * i + 2})`).join(',')})`,
-    anchors.flatMap((a) => [a.chain_id, a.sku_id])
+/** Kies de default uit een (al op bron+confidence gesorteerde) shortlist.
+ *  Kandidaten binnen 0.05 van de top met dezelfde bron gelden als gelijkwaardig;
+ *  dáárbinnen: liever geen multipack, liever een pakmaat tussen 0,5× en 2× de
+ *  benodigde hoeveelheid, dan de laagste eenheidsprijs. */
+export function pickSaneBest(
+  candidates: MatchCandidate[],
+  opts: {
+    wantsMultipack?: boolean;
+    neededBase?: { value: number; unit: string } | null;
+  } = {}
+): MatchCandidate | null {
+  const top = candidates[0] ?? null;
+  if (!top || top.source === 'correction') return top; // eigen keuze is heilig
+
+  const fitsNeeded = (c: MatchCandidate): boolean => {
+    const need = opts.neededBase;
+    if (!need || need.unit === 'st') return true; // zonder maat-eis past alles
+    const base = candidateBase(c);
+    if (!base || base.unit !== need.unit) return true; // onbekende maat: niet straffen
+    return base.value >= need.value * 0.5 && base.value <= need.value * 2;
+  };
+  const isMultipack = (c: MatchCandidate) => !opts.wantsMultipack && MULTIPACK_RX.test(c.name);
+
+  // alleen ingrijpen als de top écht scheef zit: multipack, verkeerde maat, of
+  // een top die níét "het product zelf" is terwijl die er wél tussen staan
+  // ("Roomboter kano's" boven "Roomboter ongezouten", of een vergiftigde hint)
+  const topNotPrimary = top.is_primary === false && candidates.some((c) => c.is_primary);
+  if (!isMultipack(top) && fitsNeeded(top) && !topNotPrimary) return top;
+
+  // een niet-primaire lexicon-hint mag door élke bron verslagen worden — anders
+  // bevat de tier alleen hint-rijen en blijft de vergiftigde hint winnen
+  const widen = topNotPrimary && top.source === 'lexicon';
+  const tier = candidates.filter((c) =>
+    widen
+      ? c.source !== 'correction' && c.confidence >= top.confidence - 0.25
+      : sourceRank[c.source] === sourceRank[top.source] &&
+        c.confidence >= top.confidence - (topNotPrimary ? 0.15 : 0.05)
   );
-  const embedded = new Set(
-    (withEmbedding.rows as { chain_id: string; sku_id: string }[]).map((r) => `${r.chain_id}:${r.sku_id}`)
+  const scored = tier.map((c) => ({
+    c,
+    primary: c.is_primary === false ? 1 : 0,
+    multipack: isMultipack(c) ? 1 : 0,
+    fits: fitsNeeded(c) ? 0 : 1,
+    unit: c.unit_price_cents_per_std ?? Number.MAX_SAFE_INTEGER,
+  }));
+  scored.sort(
+    (a, b) =>
+      a.primary - b.primary || a.multipack - b.multipack || a.fits - b.fits || a.unit - b.unit
   );
-  const usable = anchors.filter((a) => embedded.has(`${a.chain_id}:${a.sku_id}`));
-  if (!usable.length) return;
-
-  for (const chain of weak) {
-    const bySku = new Map<string, MatchCandidate & { sim: number }>();
-    for (const anchor of usable) {
-      const r = await q.query(IMAGE_ANN_SQL, [anchor.chain_id, anchor.sku_id, chain, IMAGE_LIMIT]);
-      for (const row of r.rows as (MatchCandidate & { sim: number | string })[]) {
-        const sim = Number(row.sim);
-        if (!(sim >= IMAGE_MIN_SIM)) continue;
-        const existing = bySku.get(row.sku_id);
-        if (!existing || sim > existing.sim) bySku.set(row.sku_id, { ...row, sim });
-      }
-    }
-    if (!bySku.size) continue;
-    const shortlistSkus = new Set(result[chain]?.shortlist.map((c) => c.sku_id) ?? []);
-    const candidates = [...bySku.values()]
-      .filter((c) => !shortlistSkus.has(c.sku_id))
-      .map(({ sim, ...c }) => ({ ...c, confidence: imageConfidence(sim), source: 'image' as const }))
-      .sort((a, b) => b.confidence - a.confidence);
-    if (!candidates.length) continue;
-    const merged = [...(result[chain]?.shortlist ?? []), ...candidates].sort(
-      (a, b) => sourceRank[a.source] - sourceRank[b.source] || b.confidence - a.confidence
-    );
-    result[chain] = { best: merged[0] ?? null, shortlist: merged.slice(0, SHORTLIST_SIZE) };
-  }
+  return scored[0]?.c ?? top;
 }
-
-const sourceRank = { correction: 0, lexicon: 1, trgm: 2, image: 2 }; // beeld concurreert met trgm op confidence
 
 /** Match one normalised item across chains. */
 export async function matchItem(
@@ -246,36 +326,114 @@ export async function matchItem(
   const morphAliases = aliases.filter((a) => a.includes(term) || term.includes(a));
   const searchTerms = [...new Set([item, term, ...morphAliases])].slice(0, 6);
   const freshProduce = aisleGroupId === 1; // groente & fruit → FORM_RX-penalty aan
-  const r = await q.query(CANDIDATE_SQL, [searchTerms, chainIds, SHORTLIST_SIZE, userId, [item], aliases, freshProduce]);
+  const r = await q.query(CANDIDATE_SQL, [searchTerms, chainIds, SHORTLIST_SIZE, userId, [item], aliases, freshProduce, term]);
+
+  // "het product zelf" herkennen (owner 2026-07-07 avond, "roomboter vóór
+  // croissants"). NB: de AI-canonieken zijn ontmerkte productnamen, geen
+  // kop-labels ("Spar kaastengel roomboter" → "kaastengel roomboter") — dus
+  // twee betrouwbare signalen i.p.v. kop-matching:
+  //   1. canoniek exact gelijk aan de term/alias → zéker het product;
+  //   2. naam óf canoniek draagt een samengesteld-woord (gebak/gerecht/vorm)
+  //      dat de query zelf niet noemt → zéker NIET het product. Suffix-match
+  //      vangt ook samenstellingen: boterhamZAKJES, eiercakEJES, roomIJS.
+  // Geldt óók voor lexicon-hints: een vergiftigde hint verliest zo zijn voorrang.
+  const aliasSet = [...new Set([...searchTerms, ...aliases.map((a) => a.toLowerCase())])];
+  const queryIsComposite = aliasSet.some((a) => COMPOSITE_RX.test(a));
+  const queryNamesForm = aliasSet.some((a) => FORM_WORDS_JS.test(a) || /\bdiepvries\b/.test(a));
+  /** matcht een AI-head_term tegen de zoektermen: exact, of kop-uitbreiding
+   *  ("volle melk" bij query "melk"). Plurals/varianten komen al uit het
+   *  gecureerde lexicon (aliasSet bevat "appels" naast "appel") — een generieke
+   *  prefix/lengte-fuzzy of pluralis-stam-heuristiek is NIET veilig gebleken:
+   *  "appel" matchte zo "appelsap" (owner-bug 2026-07-08, live gevonden via
+   *  substitution-eval.mjs), en NL-onregelmatige meervouden (boon/bonen) maken
+   *  generieke suffix-stripping riskant. Restgevallen (bv. "gele ui" vs "gele
+   *  uien" als het lexicon die exacte frase niet als alias kent) horen bij het
+   *  lexicon opgelost te worden, niet bij een fuzzy regel hier. */
+  const headMatches = (head: string): boolean =>
+    aliasSet.some((a) => head === a || head.endsWith(` ${a}`) || a.endsWith(` ${head}`));
+  const primaryOf = (
+    name: string,
+    canonical: string | null | undefined,
+    source: MatchCandidate['source'],
+    confidence: number,
+    headTerm?: string | null,
+    intentForm?: string | null,
+    isBase?: boolean | null
+  ): boolean => {
+    if (source === 'correction') return true; // eigen keuze is heilig
+    // AI-intent (0025) is de waarheid als die er is: head_term zegt wat het
+    // product ÍS, form demoteert conserven bij vers-zoekopdrachten
+    // (sperziebonen-blik zakt onder de verse zak), is_base filtert kant-en-
+    // klare/samengestelde treffers wier head toevallig op de term eindigt
+    // ("Cup-a-Soup Tomaat", "Romige Tomaat"-saus, "Rode kool met appel" —
+    // owner-bug 2026-07-08, live gevonden via substitution-eval.mjs)
+    const head = headTerm?.trim().toLowerCase();
+    if (head) {
+      if (!headMatches(head)) return false;
+      if (isBase === false) return false;
+      if (!queryIsComposite && COMPOSITE_RX.test(head)) return false;
+      // koppel-koppen zijn een méngsel, geen kop-uitbreiding: "doperwten en
+      // wortelen" eindigt op " wortelen" maar ís geen wortelen. Zoek je de mix
+      // zelf, dan staat die als alias in de set en blijft hij primair.
+      if (!aliasSet.includes(head) && /\b(en|met)\b|[&,]/.test(head)) return false;
+      if (freshProduce && !queryNamesForm) {
+        if (intentForm === 'blik' || intentForm === 'pot' || intentForm === 'gedroogd') return false;
+        // vangnet voor gelogen intent-forms ('vers' op een pot): het vorm-woord
+        // in de naam demoteert óók — "sperziebonen" toont heel vóór gebroken
+        if (FORM_WORDS_JS.test(foldJs(name))) return false;
+      }
+      return true;
+    }
+    const canon = canonical?.trim() ?? '';
+    if (canon && aliasSet.includes(canon)) return true;
+    if (!queryIsComposite && (COMPOSITE_RX.test(foldJs(name)) || (canon && COMPOSITE_RX.test(canon)))) return false;
+    if (canon) {
+      // restwoord-net: een canoniek woord dat geen alias, geen kwaliteits-
+      // bijvoeglijk naamwoord en geen marker is, is de kop van een ánder
+      // product ("roomboter KAASKANTJES", "KRAKELINGEN roomboter")
+      const leftover = canon.split(' ').some(
+        (w) =>
+          /^[a-z]{4,}$/.test(w) &&
+          !ADJ_WORDS.has(w) &&
+          !COMPOSITE_RX.test(w) &&
+          !aliasSet.some((a) => a === w || a.split(' ').includes(w))
+      );
+      if (!queryIsComposite && leftover) return false;
+      if (aliasSet.some((a) => new RegExp(`(^|\\s)${escRx(a)}($|\\s)`).test(canon))) return true;
+    }
+    if (source === 'lexicon') return true;
+    return confidence >= SHORTLIST_THRESHOLD;
+  };
 
   const byChain: Record<string, MatchCandidate[]> = {};
-  for (const row of r.rows as (MatchCandidate & { confidence: string | number })[]) {
+  for (const row of r.rows as (MatchCandidate & { confidence: string | number; canonical_name?: string | null })[]) {
     const raw = Number(row.confidence);
     // trgm raw scores are boost-stacked (0..~2); map to a 0..0.90 confidence
     const confidence = row.source === 'trgm' ? Math.min(0.9, raw * 0.5) : raw;
     const candidate = { ...row, confidence, rawScore: raw } as MatchCandidate & { rawScore: number };
+    candidate.is_primary = primaryOf(
+      row.name,
+      row.canonical_name,
+      row.source,
+      confidence,
+      row.head_term,
+      row.intent_form,
+      row.is_base
+    );
     (byChain[candidate.chain_id] ??= []).push(candidate);
   }
+
+  const wantsMultipack = MULTIPACK_RX.test(item);
 
   const result: Record<string, ChainMatch> = {};
   for (const chainId of chainIds) {
     const candidates = (byChain[chainId] ?? []).sort(
       (a, b) => sourceRank[a.source] - sourceRank[b.source] || b.confidence - a.confidence
     );
-    const best = candidates[0] ?? null;
     result[chainId] = {
-      best,
+      best: pickSaneBest(candidates, { wantsMultipack }),
       shortlist: candidates.slice(0, SHORTLIST_SIZE),
     };
-  }
-
-  // beeld-brug: zwakke ketens aanvullen via foto-gelijkenis met sterke ketens.
-  // Additief en fail-safe — een kapotte Vision/embedding-tabel breekt nooit de match.
-  try {
-    await imageTier(client, result, chainIds);
-  } catch (err) {
-    // beeld-tier is additief: nooit de match breken, wel zichtbaar in de logs
-    console.error('image-tier overgeslagen:', err instanceof Error ? err.message : err);
   }
   return result;
 }

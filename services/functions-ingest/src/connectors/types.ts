@@ -99,3 +99,18 @@ export function euroToCents(euro: number | string | null | undefined): number | 
   if (!Number.isFinite(n)) return null;
   return Math.round(n * 100);
 }
+
+/** Calculate the comparable price per kg/l/item from an already parsed pack. */
+export function unitPriceFromPack(
+  priceCents: number,
+  value: number | null,
+  unit: string | null
+): { cents: number | null; unit: string | null } {
+  if (!value || value <= 0 || !unit || priceCents <= 0) return { cents: null, unit: null };
+  if (unit === 'g') return { cents: Math.round((priceCents * 1000) / value), unit: 'kg' };
+  if (unit === 'kg') return { cents: Math.round(priceCents / value), unit: 'kg' };
+  if (unit === 'ml') return { cents: Math.round((priceCents * 1000) / value), unit: 'l' };
+  if (unit === 'l') return { cents: Math.round(priceCents / value), unit: 'l' };
+  if (unit === 'stuks') return { cents: Math.round(priceCents / value), unit: 'stuks' };
+  return { cents: null, unit: null };
+}

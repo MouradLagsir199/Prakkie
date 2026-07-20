@@ -1,5 +1,5 @@
 import { ScrollView, StyleSheet, Text, Pressable } from 'react-native';
-import { colors, radius, type } from '../../theme/tokens';
+import { colors, fonts, radius, type } from '../../theme/tokens';
 
 export interface Chip {
   key: string;
@@ -45,8 +45,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderRadius: radius.pill,
     borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    paddingHorizontal: 14,
+    borderColor: colors.borderControl,
+    paddingHorizontal: 13,
     paddingVertical: 8,
   },
   chipActive: {
@@ -55,6 +55,6 @@ const styles = StyleSheet.create({
   },
   chipTextActive: {
     color: colors.onPrimary,
-    fontFamily: 'InstrumentSans_600SemiBold',
+    fontFamily: fonts.bodySemiBold,
   },
 });

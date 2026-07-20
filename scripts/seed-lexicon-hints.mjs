@@ -41,6 +41,10 @@ const DISH_WORDS = [
   'blik', 'blikje', 'blikjes', 'gebroken', 'gedroogd', 'gedroogde', 'ingelegd', 'ingelegde',
   // gebak is geen ingrediënt: "Roomboter croissant" werd de hint voor roomboter
   'croissant', 'croissants', 'koekje', 'koekjes', 'biscuit', 'biscuits', 'sprits', 'spritsen',
+  // 2e gebak-ronde (owner 2026-07-07 avond: "Spar kaastengel roomboter" was
+  // dé roomboter-hint) — plus de canonical-kop-guard hieronder als structureel net
+  'kaastengel', 'tengel', 'tengels', 'kano', 'flap', 'flappen', 'appelflap', 'carree',
+  'cheesecake', 'picolientje', 'picolientjes', 'hoef',
 ];
 // Handmatige overrides waar géén trigram-tuning kan helpen: de zoekterm en de
 // winkel-eigen naam delen simpelweg te weinig letters (owner 2026-07-07 —
@@ -87,7 +91,7 @@ const allNouns = new Set(
     .filter((w) => w && w.length >= 4)
 );
 // Dutch compounds put the head noun last: kopSOEP, kruimelVLAAI, roomIJS
-const COMPOUND_TAILS = ['soep', 'saus', 'taart', 'vlaai', 'koek', 'drank', 'siroop', 'salade', 'schotel', 'puree', 'chips', 'vla', 'reep', 'gebak', 'mix'];
+const COMPOUND_TAILS = ['soep', 'saus', 'taart', 'vlaai', 'koek', 'drank', 'siroop', 'salade', 'schotel', 'puree', 'chips', 'vla', 'reep', 'gebak', 'mix', 'flap', 'hoef', 'tengel', 'cake', 'carree'];
 
 // full reseed: rows that no longer qualify must disappear too. The nightly
 // E5 learning loop re-adds correction-driven rows on its own schedule.
@@ -109,8 +113,9 @@ for (const lex of items) {
 
   for (const { id: chain } of chains) {
     const { rows: candidates } = await client.query(
-      `SELECT p.sku_id, p.name, p.price_cents
+      `SELECT p.sku_id, p.name, p.price_cents, public.fold_text(nc.display_name) AS canonical
        FROM catalog.products p
+       LEFT JOIN catalog.name_canonical nc ON nc.name_search = public.fold_text(p.name)
        WHERE p.chain_id = $1 AND p.available
          AND EXISTS (SELECT 1 FROM unnest($2::text[]) a
                      WHERE public.fold_text(p.name) ~ ('\\m' || a || '\\M'))
@@ -118,8 +123,18 @@ for (const lex of items) {
        LIMIT 120`,
       [chain, aliases]
     );
+    // canonical-guard (structureel, naast de woordlijsten): canoniek exact =
+    // alias → prima; canoniek dráágt een gerecht/gebak-woord (ook als suffix:
+    // eiercakEJES) dat geen alias is → nooit een hint. NB: canonieken zijn
+    // ontmerkte productnamen, géén kop-labels — dus geen ends-with-logica.
+    const suffixDishRx = new RegExp(`(${activeDishWords.join('|')})($|\\s)`);
     const scored = candidates
       .filter((c) => !dishRx.test(fold(c.name)))
+      .filter((c) => {
+        if (!c.canonical) return true;
+        const cf = fold(c.canonical);
+        return aliases.includes(cf) || !suffixDishRx.test(cf);
+      })
       .map((c) => {
         const folded = fold(c.name);
         const words = folded.split(' ');

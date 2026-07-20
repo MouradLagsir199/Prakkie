@@ -16,16 +16,26 @@ app.http('discover-feed', {
   handler: handler(async (req) => {
     await requireAuth(req);
     const q = req.query.get('q')?.trim();
-    const limit = Math.min(50, Number(req.query.get('limit') ?? 30));
+    const limit = Math.min(100, Number(req.query.get('limit') ?? 60));
     const params: unknown[] = [limit];
     let where = `cr.dead_at IS NULL
       AND NOT EXISTS (SELECT 1 FROM discovery.blocklist b WHERE cr.source_url LIKE '%' || b.domain || '%')`;
+    // zoeken (owner 2026-07-07): tsvector alléén mist substrings — "cake" moet
+    // óók "Oranje cake" en "appelcake" vinden. Dus tsv ÓF titel-substring, en
+    // relevantie (exacter = hoger) vóór de deal/prijs/versheid-ranking.
+    let relevance = '';
     if (q) {
       params.push(q);
-      where += ` AND cr.search_tsv @@ plainto_tsquery('dutch', $2)`;
+      where += ` AND (cr.search_tsv @@ plainto_tsquery('dutch', $2) OR cr.title ILIKE '%' || $2 || '%')`;
+      relevance = `GREATEST(
+        ts_rank(cr.search_tsv, plainto_tsquery('dutch', $2)),
+        public.similarity(lower(cr.title), lower($2)),
+        CASE WHEN cr.title ILIKE $2 || '%' THEN 0.9
+             WHEN cr.title ILIKE '%' || $2 || '%' THEN 0.5 ELSE 0 END
+      ) DESC,`;
     }
     const rows = await query(
-      `SELECT cr.id, cr.title, cr.site_name, cr.image_url, cr.time_total_min, cr.servings,
+      `SELECT cr.id, cr.title, cr.site_name, cr.source_url, cr.image_url, cr.time_total_min, cr.servings,
               p.price_per_portion_cents, p.deal_overlap_count
        FROM discovery.crawled_recipes cr
        LEFT JOIN LATERAL (
@@ -33,7 +43,8 @@ app.http('discover-feed', {
          WHERE rp.crawled_recipe_id = cr.id ORDER BY rp.deal_overlap_count DESC NULLS LAST LIMIT 1
        ) p ON true
        WHERE ${where}
-       ORDER BY p.deal_overlap_count DESC NULLS LAST,
+       ORDER BY ${relevance}
+                p.deal_overlap_count DESC NULLS LAST,
                 p.price_per_portion_cents ASC NULLS LAST,
                 cr.first_seen_at DESC
        LIMIT $1`,

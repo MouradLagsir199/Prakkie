@@ -160,6 +160,17 @@ async def graphql(
 
         body = resp.json()
         if body.get("errors"):
+            details = " ".join(
+                str(error.get("extensions", {}).get("Detail") or error.get("message") or "")
+                for error in body["errors"]
+                if isinstance(error, dict)
+            )
+            # Detailresult occasionally has a permanently corrupt product row
+            # (SQL scalar subquery returns multiple values). Repeating the same
+            # query cannot heal retailer data and would stall a full run for
+            # every such SKU; the caller isolates it as a list-only product.
+            if "Subquery returned more than 1 value" in details:
+                raise RuntimeError(f"Detailresult permanent product error: {details[:240]}")
             if attempt < retries:
                 await backoff_sleep(attempt, base=2.0)
                 continue
@@ -275,10 +286,18 @@ async def run(*, limit: int | None, max_groups: int | None) -> None:
         print(f"Collected {len(ids)} unique products")
 
         details: dict[str, dict | None] = {}
+        detail_failures: list[tuple[str, str]] = []
         detail_sem = asyncio.Semaphore(DETAIL_CONCURRENCY)
 
         async def hydrate(pid: str) -> None:
-            details[pid] = await fetch_detail(client, detail_sem, int(pid))
+            try:
+                details[pid] = await fetch_detail(client, detail_sem, int(pid))
+            except Exception as error:
+                # A retailer-side data defect in one SKU must never discard the
+                # otherwise complete nightly catalog. The list row still has
+                # name, price, pack and image; only its EAN/detail stays absent.
+                details[pid] = None
+                detail_failures.append((pid, str(error).splitlines()[0][:240]))
 
         for start in range(0, len(ids), 500):
             chunk = ids[start : start + 500]
@@ -289,6 +308,12 @@ async def run(*, limit: int | None, max_groups: int | None) -> None:
             for pid in ids:
                 writer.write(envelope(rows_by_id[pid], details.get(pid)))
         print(f"Wrote {len(ids)} products to {out_path}")
+        if detail_failures:
+            sample = ", ".join(pid for pid, _ in detail_failures[:10])
+            print(
+                f"Warning: {len(detail_failures)} product details failed and were kept "
+                f"as list-only rows (sample ids: {sample})"
+            )
 
 
 def main() -> None:

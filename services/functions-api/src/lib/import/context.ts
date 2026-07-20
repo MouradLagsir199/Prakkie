@@ -21,6 +21,29 @@ export interface LinkContext {
   warnings: string[];
 }
 
+/** De onbewerkte tekst die de import-API's daadwerkelijk hebben gevonden.
+ * Deze reist mee naar de review, zodat de gebruiker vóór iedere AI-aanvulling
+ * zelf kan zien wat caption, transcript en JSON-LD opleverden. */
+export interface SourceCapture {
+  title: string | null;
+  author: string | null;
+  caption: string | null;
+  transcript: string | null;
+  structured_ingredients: string[];
+  structured_steps: string[];
+}
+
+export function sourceCaptureOf(ctx: LinkContext): SourceCapture {
+  return {
+    title: ctx.title,
+    author: ctx.author,
+    caption: ctx.description,
+    transcript: ctx.transcript,
+    structured_ingredients: ctx.jsonLd?.ingredients ?? [],
+    structured_steps: ctx.jsonLd?.instructions ?? [],
+  };
+}
+
 export const MAX_SOCIAL_VIDEO_SECONDS = 5 * 60;
 export const MIN_TRANSCRIPT_CHARS = 40;
 export const MAX_TRANSCRIPT_CHARS = 12_000;
@@ -68,6 +91,7 @@ function decodeEntities(s: string): string {
 }
 
 export interface PageMetadata {
+  resolvedUrl: string;
   title: string | null;
   description: string | null;
   image: string | null;
@@ -86,6 +110,7 @@ export async function fetchPageMetadata(url: string, timeoutSeconds = 12): Promi
       metaContent(html, ['og:title', 'twitter:title']) ??
       (decodeEntities(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.trim() ?? '') || null);
     return {
+      resolvedUrl: res.url || url,
       title,
       description: metaContent(html, ['og:description', 'twitter:description', 'description']),
       image: metaContent(html, ['og:image', 'twitter:image']),
@@ -103,7 +128,7 @@ export async function fetchPageMetadata(url: string, timeoutSeconds = 12): Promi
 export async function fetchPlatformOembed(
   url: string,
   platform: Platform
-): Promise<{ title: string | null; author: string | null; description: string | null } | null> {
+): Promise<{ title: string | null; author: string | null; description: string | null; image: string | null } | null> {
   const endpoint =
     platform === 'tiktok'
       ? `https://www.tiktok.com/oembed?url=${encodeURIComponent(url)}`
@@ -114,8 +139,15 @@ export async function fetchPlatformOembed(
   try {
     const res = await fetch(endpoint, { headers: { accept: 'application/json' } });
     if (!res.ok) return null;
-    const o = (await res.json()) as { title?: string; author_name?: string; description?: string };
-    return { title: o.title ?? null, author: o.author_name ?? null, description: o.description ?? null };
+    const o = (await res.json()) as {
+      title?: string; author_name?: string; description?: string; thumbnail_url?: string;
+    };
+    return {
+      title: o.title ?? null,
+      author: o.author_name ?? null,
+      description: o.description ?? null,
+      image: o.thumbnail_url ?? null,
+    };
   } catch {
     return null;
   }
@@ -134,7 +166,7 @@ export function hasUsableRecipeSignal(ctx: LinkContext): boolean {
   return text.length >= 80 && RECIPE_WORDS.test(text);
 }
 
-const TRANSIENT_RX = /rate.?limit|memory.?limit|timeout|timed?.?out|http 5\d\d|econnre|abort/i;
+const TRANSIENT_RX = /rate.?limit|usage limit|memory.?limit|timeout|timed?.?out|http 5\d\d|econnre|abort/i;
 
 /** 503 when warnings look transient, else 422 (docs/06 §5). */
 export function failureKind(warnings: string[]): 'transient_503' | 'unusable_422' {

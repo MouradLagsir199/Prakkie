@@ -27,6 +27,8 @@ export interface EntityDef {
   hasTombstone?: boolean;
   /** column stamped with the requesting user id on INSERT (attribution, e.g. list_items.added_by) */
   stampUserColumn?: string;
+  /** row carries a shared_with uuid[] — named members see it too (lijst delen, 2026-07-07) */
+  sharedWith?: boolean;
 }
 
 export const SYNC_ENTITIES = {
@@ -61,7 +63,8 @@ export const SYNC_ENTITIES = {
   lists: {
     table: 'app.lists',
     scope: 'ownerHousehold',
-    writable: ['household_id', 'name', 'layout_chain_id', 'sort_order', 'week_start'],
+    sharedWith: true,
+    writable: ['household_id', 'name', 'layout_chain_id', 'sort_order', 'week_start', 'shared_with', 'is_current'],
     jsonb: [],
     fieldGroups: [],
     insertRequired: ['name'],
@@ -89,8 +92,9 @@ export const SYNC_ENTITIES = {
   plan_entries: {
     table: 'app.plan_entries',
     scope: 'planChild',
-    // title = note meal without recipe_id (UX-audit P3); DB CHECK enforces one of the two
-    writable: ['plan_id', 'recipe_id', 'title', 'entry_date', 'meal_slot', 'servings', 'sort_order'],
+    // title = los cataloog-product zonder recipe_id (owner 2026-07-10), met
+    // quantity/unit voor de boodschappen-import; DB CHECK eist recipe_id óf title
+    writable: ['plan_id', 'recipe_id', 'title', 'entry_date', 'meal_slot', 'servings', 'sort_order', 'quantity', 'unit', 'image_url'],
     jsonb: [],
     fieldGroups: [],
     insertRequired: ['plan_id', 'servings'],
@@ -130,10 +134,13 @@ export function getEntity(name: string): EntityDef | undefined {
 export function visibilityWhere(def: EntityDef, alias = 't'): string {
   const memberHouseholds = `SELECT household_id FROM app.household_members WHERE user_id = $1`;
   switch (def.scope) {
-    case 'ownerHousehold':
-      return `(${alias}.owner_id = $1 OR ${alias}.household_id IN (${memberHouseholds}))`;
+    case 'ownerHousehold': {
+      const shared = def.sharedWith ? ` OR $1 = ANY(${alias}.shared_with)` : '';
+      return `(${alias}.owner_id = $1 OR ${alias}.household_id IN (${memberHouseholds})${shared})`;
+    }
     case 'listChild':
-      return `${alias}.list_id IN (SELECT l.id FROM app.lists l WHERE l.owner_id = $1 OR l.household_id IN (${memberHouseholds}))`;
+      // gedeelde lijsten: wie de lijst mag zien (huisgenoot óf shared_with-lid) ziet ook de items
+      return `${alias}.list_id IN (SELECT l.id FROM app.lists l WHERE l.owner_id = $1 OR l.household_id IN (${memberHouseholds}) OR $1 = ANY(l.shared_with))`;
     case 'planChild':
       return `${alias}.plan_id IN (SELECT p.id FROM app.plans p WHERE p.owner_id = $1 OR p.household_id IN (${memberHouseholds}))`;
     case 'userKeyed':

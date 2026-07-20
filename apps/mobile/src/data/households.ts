@@ -16,8 +16,14 @@ export interface MemberInfo {
   user_id: string;
   display_name: string | null;
   email: string | null;
+  /** owner = admin · editor = mag bewerken · viewer = alleen lezen */
   role: string;
+  avatar_url?: string | null;
+  last_active_at?: string | null;
 }
+
+export const roleLabel = (role: string) =>
+  role === 'owner' ? 'admin' : role === 'viewer' ? 'alleen lezen' : 'mag bewerken';
 
 const KV_KEY = 'prakkie.household';
 

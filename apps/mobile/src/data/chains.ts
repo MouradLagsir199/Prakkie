@@ -27,6 +27,18 @@ export function mondayOf(offsetWeeks: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** Monday (ISO) of the week that contains `iso`, as yyyy-mm-dd. */
+export function mondayOfDate(iso: string): string {
+  const d = new Date(`${iso}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+  return d.toISOString().slice(0, 10);
+}
+
+/** Hele weken tussen twee maandagen (b − a), voor week-offset navigatie. */
+export function weeksBetween(mondayA: string, mondayB: string): number {
+  return Math.round((new Date(`${mondayB}T12:00:00Z`).getTime() - new Date(`${mondayA}T12:00:00Z`).getTime()) / (7 * 864e5));
+}
+
 export function addDays(iso: string, days: number): string {
   const d = new Date(`${iso}T12:00:00Z`);
   d.setUTCDate(d.getUTCDate() + days);

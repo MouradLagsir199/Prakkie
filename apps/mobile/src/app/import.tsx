@@ -1,20 +1,19 @@
 import * as Clipboard from 'expo-clipboard';
 import { useRouter } from 'expo-router';
-import { Camera, ClipboardPaste, Link2, PencilLine, X } from 'lucide-react-native';
+import { Link2, PencilLine, Sparkles, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { CTAButton } from '../components/prakkie/CTAButton';
+import { authedRequest } from '../data/api';
 import { ImportError, importUrl, setPendingReview } from '../data/import-flow';
 import { notice } from '../lib/dialogs';
-import { colors, fonts, radius, type } from '../theme/tokens';
+import { colors, fonts, radius, shadows, type } from '../theme/tokens';
 
-/** Import sheet — mockup 03 1:1: clipboard card + green CTA, "of kies zelf",
- *  option cards, share-tip footer. Live flow → /v1/import → review. */
+/** Import sheet: clipboard card + link/manual choices. Live flow → /v1/import → review. */
 
 const OPTIONS = [
   { key: 'link', label: 'Plak een link', Icon: Link2 },
-  { key: 'photo', label: 'Foto of scan', Icon: Camera, soon: true },
-  { key: 'text', label: 'Tekst plakken', Icon: ClipboardPaste, soon: true },
   { key: 'manual', label: 'Handmatig', Icon: PencilLine },
 ];
 
@@ -35,6 +34,9 @@ export default function ImportSheet() {
   const [clipboardUrl, setClipboardUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
+  const [progress, setProgress] = useState(0);
+  // import-tegoed vooraf zichtbaar, in de vaste quota-accentkleur (owner 2026-07-10)
+  const [importQuota, setImportQuota] = useState<{ used: number; limit: number } | null>(null);
 
   useEffect(() => {
     Clipboard.getStringAsync()
@@ -42,7 +44,26 @@ export default function ImportSheet() {
         if (looksLikeUrl(s)) setClipboardUrl(s.trim());
       })
       .catch(() => {});
+    authedRequest('/v1/me/quota')
+      .then(async (r) => {
+        if (!r.ok) return;
+        const q = (await r.json()) as { import?: { used: number; limit: number } };
+        if (q.import) setImportQuota(q.import);
+      })
+      .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!busy) return;
+    const timer = setInterval(() => {
+      setProgress((current) => {
+        const ceiling = status === 'Recept samenstellen…' ? 96 : 72;
+        if (current >= ceiling) return current;
+        return Math.min(ceiling, current + Math.max(0.25, (ceiling - current) * 0.018));
+      });
+    }, 700);
+    return () => clearInterval(timer);
+  }, [busy, status]);
 
   async function run(target: string) {
     if (!looksLikeUrl(target)) {
@@ -50,13 +71,18 @@ export default function ImportSheet() {
       return;
     }
     setBusy(true);
+    setProgress(3);
     try {
-      const outcome = await importUrl(target.trim(), setStatus);
+      const outcome = await importUrl(target.trim(), (nextStatus, nextProgress) => {
+        setStatus(nextStatus);
+        setProgress((current) => Math.max(current, nextProgress));
+      });
       setPendingReview(outcome);
       router.replace('/review');
     } catch (err) {
+      const quotaHit = err instanceof ImportError && (err.code === 'quota_exceeded' || err.code === 'trial_expired');
       const msg = err instanceof ImportError ? err.message : 'Import mislukt. Probeer het opnieuw.';
-      notice('Import mislukt', msg);
+      notice(quotaHit ? 'Import-tegoed op' : 'Import mislukt', msg);
     } finally {
       setBusy(false);
       setStatus('');
@@ -64,7 +90,7 @@ export default function ImportSheet() {
   }
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top + 10 }]}>
+    <View style={[styles.screen, { paddingTop: insets.top + 18 }]}>
       <View style={styles.grabber} />
       <View style={styles.headerRow}>
         <Text style={styles.title}>Recept importeren</Text>
@@ -73,11 +99,25 @@ export default function ImportSheet() {
         </Pressable>
       </View>
 
+      {/* import-tegoed in de vaste quota-accentkleur — zelfde badge als bij
+          "Vind mijn prakkie" (owner 2026-07-10) */}
+      <View style={styles.quotaBadge}>
+        <Sparkles size={13} color={colors.quota} strokeWidth={2.2} />
+        <Text style={styles.quotaBadgeText}>
+          {importQuota
+            ? `nog ${Math.max(0, importQuota.limit - importQuota.used)} van ${importQuota.limit} imports deze maand`
+            : 'AI-tegoed laden…'}
+        </Text>
+      </View>
+
       {busy ? (
         <View style={styles.busyBox}>
-          <ActivityIndicator color={colors.primary} size="large" />
+          <Text style={styles.progressValue}>{Math.round(progress)}%</Text>
+          <View style={styles.progressTrack} accessibilityRole="progressbar" accessibilityValue={{ min: 0, max: 100, now: Math.round(progress) }}>
+            <View style={[styles.progressFill, { width: `${Math.min(100, progress)}%` }]} />
+          </View>
           <Text style={type.body}>{status || 'Bezig met importeren…'}</Text>
-          <Text style={type.meta}>Video's kunnen tot een minuut duren</Text>
+          <Text style={type.meta}>Je kunt dit scherm open laten; we verwerken alle beschikbare broninformatie.</Text>
         </View>
       ) : (
         <ScrollView contentContainerStyle={{ gap: 14, paddingBottom: insets.bottom + 24 }} showsVerticalScrollIndicator={false}>
@@ -92,9 +132,7 @@ export default function ImportSheet() {
                   <Text style={styles.clipSub} numberOfLines={1}>{hostOf(clipboardUrl)}</Text>
                 </View>
               </View>
-              <Pressable style={styles.clipCta} onPress={() => run(clipboardUrl)}>
-                <Text style={styles.clipCtaText}>Importeer deze link</Text>
-              </Pressable>
+              <CTAButton label="Importeer deze link" onPress={() => run(clipboardUrl)} />
               <Text style={styles.clipHint}>
                 Video-import: gesproken én in beeld getoonde ingrediënten worden herkend
               </Text>
@@ -114,9 +152,7 @@ export default function ImportSheet() {
                 onChangeText={setUrl}
                 onSubmitEditing={() => run(url)}
               />
-              <Pressable style={styles.goBtn} onPress={() => run(url)}>
-                <Text style={{ fontSize: 13, fontFamily: fonts.bodySemiBold, color: colors.onPrimary }}>Import</Text>
-              </Pressable>
+              <CTAButton label="Import" onPress={() => run(url)} />
             </View>
           ) : null}
 
@@ -127,25 +163,25 @@ export default function ImportSheet() {
           </View>
 
           <View style={{ gap: 10 }}>
-            {OPTIONS.map(({ key, label, Icon, soon }) => (
+            {OPTIONS.map(({ key, label, Icon }) => (
               <Pressable
                 key={key}
                 accessibilityRole="button"
-                style={[styles.option, soon && { opacity: 0.55 }]}
+                style={styles.option}
                 onPress={() => {
                   if (key === 'link') setShowInput(true);
-                  else if (key === 'manual') {
+                  else {
                     setPendingReview({
                       recipe: { id: '', title: '', ingredients: [], steps: [], servings_base: 2 },
                       warnings: [],
                       importId: '',
                     });
                     router.replace('/review');
-                  } else notice('Binnenkort', 'Foto/OCR en tekst plakken komen in een volgende update.');
+                  }
                 }}
               >
                 <Icon size={19} strokeWidth={1.9} color={colors.primary} />
-                <Text style={styles.optionLabel}>{label}{soon ? '  ·  binnenkort' : ''}</Text>
+                <Text style={styles.optionLabel}>{label}</Text>
               </Pressable>
             ))}
           </View>
@@ -166,17 +202,26 @@ export default function ImportSheet() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg, paddingHorizontal: 20 },
   grabber: { alignSelf: 'center', width: 44, height: 5, borderRadius: 99, backgroundColor: 'rgba(34,48,30,.15)', marginBottom: 10 },
-  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
+  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  quotaBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', marginBottom: 14,
+    backgroundColor: colors.quotaBg, borderWidth: 1, borderColor: colors.quotaBorder,
+    borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 6,
+  },
+  quotaBadgeText: { fontSize: 12, fontFamily: fonts.bodySemiBold, color: colors.quota },
   title: { fontFamily: fonts.display, fontSize: 23, lineHeight: 26, color: colors.text },
   close: {
     width: 32, height: 32, borderRadius: 16, backgroundColor: colors.surface, alignItems: 'center',
-    justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(34,48,30,.1)',
+    justifyContent: 'center', borderWidth: 1, borderColor: colors.border,
   },
   busyBox: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 14 },
+  progressValue: { fontFamily: fonts.display, fontSize: 30, color: colors.primary },
+  progressTrack: { width: '82%', height: 9, borderRadius: 99, overflow: 'hidden', backgroundColor: colors.surfaceMuted },
+  progressFill: { height: '100%', borderRadius: 99, backgroundColor: colors.primary },
   clipCard: {
-    backgroundColor: colors.surface, borderRadius: 18, padding: 14, gap: 12,
-    borderWidth: 1, borderColor: 'rgba(34,48,30,.08)',
-    shadowColor: '#22301E', shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2,
+    backgroundColor: colors.surface, borderRadius: radius.listCard, padding: 14, gap: 12,
+    borderWidth: 1, borderColor: colors.borderSubtle,
+    ...shadows.card,
   },
   clipRow: { flexDirection: 'row', alignItems: 'center', gap: 11 },
   clipThumb: {
@@ -185,23 +230,20 @@ const styles = StyleSheet.create({
   },
   clipTitle: { fontSize: 13.5, fontFamily: fonts.bodySemiBold, color: colors.text },
   clipSub: { fontSize: 12, color: colors.textMuted },
-  clipCta: { backgroundColor: colors.primary, borderRadius: 13, paddingVertical: 13, alignItems: 'center' },
-  clipCtaText: { fontSize: 15, fontFamily: fonts.bodySemiBold, color: colors.onPrimary },
   clipHint: { fontSize: 11.5, color: colors.textMuted, textAlign: 'center' },
   inputRow: { flexDirection: 'row', gap: 10 },
   input: {
     flex: 1, backgroundColor: colors.surface, borderRadius: radius.control, paddingHorizontal: 14,
-    paddingVertical: 12, borderWidth: 1, borderColor: 'rgba(34,48,30,.12)', fontSize: 14, color: colors.text,
+    paddingVertical: 12, borderWidth: 1, borderColor: colors.borderControl, fontSize: 13.5, color: colors.text,
   },
-  goBtn: { backgroundColor: colors.primary, borderRadius: radius.control, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center' },
   divider: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  dividerLine: { flex: 1, height: 1, backgroundColor: 'rgba(34,48,30,.1)' },
+  dividerLine: { flex: 1, height: 1, backgroundColor: colors.border },
   dividerText: { fontSize: 11.5, color: colors.textMuted },
   option: {
     flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: colors.surface,
-    borderRadius: 15, paddingHorizontal: 15, paddingVertical: 14, borderWidth: 1, borderColor: 'rgba(34,48,30,.08)',
+    borderRadius: radius.listCard, paddingHorizontal: 15, paddingVertical: 14, borderWidth: 1, borderColor: colors.borderSubtle,
   },
   optionLabel: { fontSize: 13, fontFamily: fonts.bodySemiBold, color: colors.text },
-  tip: { backgroundColor: colors.badgeBg, borderRadius: 14, padding: 12 },
-  tipText: { fontSize: 12, color: '#3D5138', textAlign: 'center' },
+  tip: { backgroundColor: colors.badgeBg, borderRadius: radius.lg, padding: 12 },
+  tipText: { fontSize: 12, color: colors.textSoft, textAlign: 'center' },
 });

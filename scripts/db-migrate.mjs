@@ -19,7 +19,15 @@ const migrationsDir = join(repoRoot, 'services', 'migrations');
 const vaultName = `kv-prakkie-${env}`;
 
 function az(...args) {
-  return execFileSync('az', args, { encoding: 'utf8', shell: process.platform === 'win32' }).trim();
+  // The Windows Azure CLI 2.88 wrapper starts Python 3.14 with `-B`, which can
+  // hang before command dispatch on some installations. Allow deploys to use
+  // the bundled Python directly without changing or reinstalling the CLI.
+  const python = process.env.AZURE_CLI_PYTHON?.trim();
+  return execFileSync(
+    python || 'az',
+    python ? ['-I', '-m', 'azure.cli', ...args] : args,
+    { encoding: 'utf8', shell: !python && process.platform === 'win32' }
+  ).trim();
 }
 function kvSecret(name) {
   return az('keyvault', 'secret', 'show', '--vault-name', vaultName, '--name', name, '--query', 'value', '-o', 'tsv');

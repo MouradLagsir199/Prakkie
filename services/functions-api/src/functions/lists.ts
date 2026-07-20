@@ -10,6 +10,8 @@ const ListBody = z.object({
   name: z.string().min(1),
   layout_chain_id: ChainId.optional(),
   sort_order: z.number().int().optional(),
+  /** dé actuele boodschappenlijst — er is er maar één (owner 2026-07-10) */
+  is_current: z.boolean().optional(),
 });
 
 registerCrud({

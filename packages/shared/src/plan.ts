@@ -2,16 +2,21 @@ import { z } from 'zod';
 
 /** Meal planning — spec §H, mockup 05 is the contract. */
 
-export const MealSlot = z.enum(['dinner', 'lunch', 'breakfast']);
+export const MealSlot = z.enum(['dinner', 'lunch', 'breakfast', 'snack']);
 export type MealSlot = z.infer<typeof MealSlot>;
 
 export const PlanEntry = z.object({
   id: z.string().uuid(),
   plan_id: z.string().uuid(),
-  /** null = note meal without a recipe — title carries it (UX-audit P3). */
+  /** null = los cataloog-product — title/quantity/unit dragen het (owner 2026-07-10). */
   recipe_id: z.string().uuid().nullable().default(null),
-  /** free-text meal ("uit eten", "restjes"); required when recipe_id is null. */
+  /** productnaam uit de catalogus; verplicht als recipe_id null is. Geen vrije tekst. */
   title: z.string().nullable().default(null),
+  /** hoeveelheid van het losse product — gaat mee naar het boodschappenlijstje */
+  quantity: z.number().positive().nullable().default(null),
+  unit: z.string().nullable().default(null),
+  /** Productfoto voor losse catalogusproducten in de planner. */
+  image_url: z.string().url().nullable().default(null),
   /** null = the "Zonder datum · deze week nog inplannen" parking strip (spec §H3). */
   entry_date: z.string().date().nullable().default(null),
   meal_slot: MealSlot.default('dinner'),

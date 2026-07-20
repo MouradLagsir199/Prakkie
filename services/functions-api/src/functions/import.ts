@@ -3,22 +3,28 @@ import { BlobServiceClient } from '@azure/storage-blob';
 import { QueueServiceClient } from '@azure/storage-queue';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { consumeAiQuota, getAiQuota, tierOf } from '../lib/ai-quota';
 import { query } from '../lib/db';
 import { env } from '../lib/env';
 import { HttpError, handler, json, parseBody, requireAuth } from '../lib/http';
-import { detectPlatform, failureKind, hasUsableRecipeSignal, type LinkContext } from '../lib/import/context';
+import { detectPlatform, failureKind, hasUsableRecipeSignal, sourceCaptureOf, type LinkContext } from '../lib/import/context';
 import { collectLinkContext, isSlowPath } from '../lib/import/platforms';
+import { EnrichInput, enrichRecipe } from '../lib/import/enrich-recipe';
+import { generateRecipe } from '../lib/import/generate-recipe';
 import { parseRecipe } from '../lib/import/parse-recipe';
 
 /**
  * WS3 — POST /v1/import + GET /v1/import/{id} + queue worker (docs/06 §1).
- * Fast paths (blog JSON-LD, captions, cache hits) answer synchronously; the
- * video-transcript tail goes 202 + importId via the import-jobs storage queue
+ * Blog JSON-LD and cache hits answer synchronously; every social/video import
+ * collects metadata, post text and transcript via the queue before parsing
  * (queue instead of Durable Functions: same 202+poll contract, one less
  * dependency on the Consumption plan).
  */
 
-const urlHash = (url: string) => createHash('sha256').update(url.trim()).digest('hex');
+// v4 invalidates imports with generic social titles/missing thumbnails and the
+// old transcript fallback input. Corrected source data must not be hidden by
+// an older successful cache entry.
+const urlHash = (url: string) => createHash('sha256').update(`metric-nl-v7:${url.trim()}`).digest('hex');
 
 function cacheBlob(hash: string) {
   return BlobServiceClient.fromConnectionString(env.storageConnection)
@@ -63,7 +69,25 @@ async function finishJob(id: string, ctx: LinkContext): Promise<{ status: number
       : { status: 422, body: { error: 'unusable_link', message: 'Geen openbaar recept gevonden op deze link', import_id: id } };
   }
   await setJob(id, { status: 'parsing' });
-  const recipe = await parseRecipe(ctx);
+  // quotum pas hier: mislukte scrapes en cache-hits kosten geen tik — alleen
+  // een échte parse-LLM-call telt (lib/ai-quota.ts). De queue-worker heeft
+  // geen claims, dus user + tier komen uit de job-rij.
+  const owner = await query<{ user_id: string }>(`SELECT user_id FROM app.import_jobs WHERE id = $1`, [id]);
+  const userId = owner.rows[0]!.user_id;
+  try {
+    await consumeAiQuota(userId, await tierOf(userId), 'import');
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 402) {
+      await setJob(id, {
+        status: 'failed',
+        failure_kind: err.code === 'trial_expired' ? 'trial_expired' : 'quota_exceeded',
+        warnings: [err.message],
+      });
+    }
+    throw err;
+  }
+  const parsed = await parseRecipe(ctx);
+  const recipe = { ...parsed, source_capture: sourceCaptureOf(ctx) };
   await setJob(id, { status: 'ready', result_recipe: recipe, warnings: ctx.warnings });
   await writeCache(urlHash(ctx.url), { recipe, warnings: ctx.warnings });
   return { status: 200, body: { import_id: id, recipe, warnings: ctx.warnings } };
@@ -103,7 +127,7 @@ app.http('import-recipe', {
       return json(202, { import_id: id, status: 'queued' });
     }
 
-    // fast path: blog / youtube metadata — synchronous
+    // fast path: ordinary webpages; social/video sources always use the queue
     const ctx = await collectLinkContext(body.url);
     const result = await finishJob(id, ctx);
     if (result.status >= 400) {
@@ -134,6 +158,47 @@ app.http('import-status', {
   }),
 });
 
+/**
+ * POST /v1/recipes/enrich — "Vul het recept aan" (owner 2026-07-10). De derde
+ * AI-actie: de gebruiker drukt zelf op de knop als een geïmporteerd recept nog
+ * gaten heeft (hoeveelheden, dun stappenplan). Recepten zijn local-first, dus
+ * de huidige recept-staat komt mee in de body en het verrijkte recept gaat
+ * terug — de server bewaart niets.
+ */
+app.http('recipe-enrich', {
+  methods: ['POST'],
+  authLevel: 'anonymous',
+  route: 'v1/recipes/enrich',
+  handler: handler(async (req) => {
+    const claims = await requireAuth(req);
+    const body = await parseBody(req, z.object({ recipe: EnrichInput }));
+    await consumeAiQuota(claims.userId, claims.tier, 'enrich');
+    const recipe = await enrichRecipe(body.recipe);
+    const { quotas } = await getAiQuota(claims.userId, claims.tier);
+    return json(200, { recipe, quota: quotas.enrich });
+  }),
+});
+
+/**
+ * POST /v1/recipes/generate — "Genereer recept" (owner 2026-07-10). Vierde
+ * AI-actie: bij lege zoekresultaten in Recepten schrijft de AI een compleet
+ * recept voor de zoekterm. De client zet het resultaat in het review-scherm;
+ * bewaren blijft een bewuste gebruikershandeling.
+ */
+app.http('recipe-generate', {
+  methods: ['POST'],
+  authLevel: 'anonymous',
+  route: 'v1/recipes/generate',
+  handler: handler(async (req) => {
+    const claims = await requireAuth(req);
+    const body = await parseBody(req, z.object({ query: z.string().trim().min(2).max(120) }));
+    await consumeAiQuota(claims.userId, claims.tier, 'generate');
+    const recipe = await generateRecipe(body.query);
+    const { quotas } = await getAiQuota(claims.userId, claims.tier);
+    return json(200, { recipe, quota: quotas.generate });
+  }),
+});
+
 app.storageQueue('import-worker', {
   queueName: 'import-jobs',
   connection: 'AzureWebJobsStorage',
@@ -146,6 +211,9 @@ app.storageQueue('import-worker', {
       await finishJob(importId, ctx);
     } catch (err) {
       invocation.error(`import-worker ${importId}: ${err instanceof Error ? err.message : err}`);
+      // op-quotum is al eerlijk op de job gezet door finishJob — niet
+      // overschrijven met een misleidende "tijdelijk niet bereikbaar"
+      if (err instanceof HttpError && err.status === 402) return;
       await setJob(importId, {
         status: 'failed',
         failure_kind: 'transient_503',

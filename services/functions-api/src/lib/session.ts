@@ -11,6 +11,7 @@ export interface UserRow {
   id: string;
   email: string | null;
   display_name: string | null;
+  avatar_url: string | null;
   is_guest: boolean;
   locale: string;
   units: string;
@@ -22,7 +23,7 @@ export interface UserRow {
 }
 
 export const PUBLIC_USER_COLUMNS =
-  'id, email, display_name, is_guest, locale, units, default_servings, diet_flags, home_chain_ids, created_at, updated_at';
+  'id, email, display_name, avatar_url, is_guest, locale, units, default_servings, diet_flags, home_chain_ids, created_at, updated_at';
 
 export interface TokenBundle {
   access_token: string;

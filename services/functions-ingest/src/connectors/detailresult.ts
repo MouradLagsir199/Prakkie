@@ -1,6 +1,7 @@
 import {
   euroToCents,
   parsePackSize,
+  unitPriceFromPack,
   type BronzeEnvelope,
   type ChainConnector,
   type NormalizedProduct,
@@ -93,6 +94,7 @@ export const detailresultConnector: ChainConnector = {
     const hasOffer = offerCents !== null && offerCents > 0 && offerCents < priceCents;
 
     const pack = parsePackSize(info?.packaging ?? detail?.packaging);
+    const perUnit = unitPriceFromPack(priceCents, pack.value, pack.unit);
 
     return {
       skuId: String(list.productId),
@@ -102,8 +104,8 @@ export const detailresultConnector: ChainConnector = {
       packSizeValue: pack.value,
       packSizeUnit: pack.unit,
       priceCents,
-      unitPriceCentsPerStd: null, // the gateway exposes no unit-price field
-      stdUnit: null,
+      unitPriceCentsPerStd: perUnit.cents,
+      stdUnit: perUnit.unit,
       promo: hasOffer
         ? {
             type: 'offer',

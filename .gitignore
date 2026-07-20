@@ -5,6 +5,7 @@ secrets.txt
 *.local
 local.settings.json
 .azure/
+client_secret_*.json
 
 # Dependencies & build output
 node_modules/
@@ -17,3 +18,22 @@ build/
 # OS noise
 .DS_Store
 Thumbs.db
+
+# Local agent/editor tooling — not needed to run the app
+.claude/
+
+# Archives, scratch & throwaway output
+*.zip
+*.log
+.tmp-*
+Output/
+REDESIGN/
+test-results/
+.publish-api.zip
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Stray empty stub at repo root (real config lives in apps/mobile/app.json)
+/app.json

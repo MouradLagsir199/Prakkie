@@ -8,6 +8,10 @@ import type { FixtureRecipe } from '../fixtures/recipes';
 
 export interface RecipeRowData {
   id: string;
+  /** server-gestempeld: eigenaar; ontbreekt tot de eerste sync (lokaal nieuw) */
+  owner_id?: string | null;
+  /** gezet = gedeeld met dat huishouden (filter "Gedeeld" in Ontdek) */
+  household_id?: string | null;
   title: string;
   images?: { url?: string }[] | string[];
   time_prep_min?: number | null;
@@ -22,6 +26,15 @@ export interface RecipeRowData {
   source_platform?: string | null;
   price_cache?: { per_portion_cents?: number; has_bonus?: boolean } | null;
   missing_fields?: string[];
+  /** Ruwe API-opbrengst vóór structurering of een expliciete AI-aanvulling. */
+  source_capture?: {
+    title?: string | null;
+    author?: string | null;
+    caption?: string | null;
+    transcript?: string | null;
+    structured_ingredients?: string[];
+    structured_steps?: string[];
+  };
   created_at?: string;
 }
 

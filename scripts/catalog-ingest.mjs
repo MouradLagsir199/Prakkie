@@ -1,5 +1,7 @@
 // Local catalog ingest (WS2 dev loop): bronze JSONL file → catalog.products on dev.
 //   node scripts/catalog-ingest.mjs --chain ah --file ../Supermarket_Scrapers/Output/ah_bronze.jsonl [--no-sweep] [--env dev]
+//   --bootstrap-disabled is an explicit local-admin escape hatch for the first
+//   inspected import of a new chain. The hosted ingest endpoint cannot use it.
 // Bundles the functions-ingest pipeline with esbuild (same code that runs in
 // Azure), connects as the PG admin via Key Vault, and streams the file through
 // ingestChain. Partial files (scraper --limit runs) should pass --no-sweep.
@@ -18,6 +20,7 @@ const chain = arg('chain');
 const file = arg('file');
 const env = arg('env', 'dev');
 const sweep = !process.argv.includes('--no-sweep');
+const bootstrapDisabled = process.argv.includes('--bootstrap-disabled');
 if (!chain || !file) {
   console.error('Usage: node scripts/catalog-ingest.mjs --chain <id> --file <bronze.jsonl> [--no-sweep]');
   process.exit(1);
@@ -41,14 +44,31 @@ execSync(
   { cwd: repoRoot, stdio: 'inherit' }
 );
 
-const { ingestChain } = await import(pathToFileURL(join(outDir, 'ingest.js')).href);
-const { connectorFor } = await import(pathToFileURL(join(outDir, 'index.js')).href);
+// Met meerdere entrypoints bewaart esbuild hun relatieve lib/connectors-map.
+// De oude vlakke paden maakten de lokale ingest op Windows onbruikbaar.
+const { ingestChain } = await import(pathToFileURL(join(outDir, 'lib', 'ingest.js')).href);
+const { connectorFor } = await import(pathToFileURL(join(outDir, 'connectors', 'index.js')).href);
 
 const connector = connectorFor(chain);
 if (!connector) throw new Error(`No connector for chain '${chain}'`);
 
-const lines = createInterface({ input: createReadStream(resolve(file), 'utf8') });
-console.log(`Ingesting ${file} → catalog.products [${chain}] (sweep=${sweep})…`);
-const result = await ingestChain(connector, chain, lines, { sweep });
+// Open de stream pas wanneer ingestChain daadwerkelijk begint te itereren.
+// Een readline-interface start meteen met lezen; tijdens de Azure/PG-connect
+// kon een klein bestand daardoor al volledig voorbij zijn vóór de consumer
+// zijn `for await` bereikte, waarna die eindeloos op een volgende regel wachtte.
+async function* readLinesLazily(path) {
+  const lines = createInterface({ input: createReadStream(path, 'utf8') });
+  try {
+    for await (const line of lines) yield line;
+  } finally {
+    lines.close();
+  }
+}
+const lines = readLinesLazily(resolve(file));
+console.log(`Ingesting ${file} → catalog.products [${chain}] (sweep=${sweep}, bootstrapDisabled=${bootstrapDisabled})…`);
+const result = await ingestChain(connector, chain, lines, {
+  sweep,
+  allowDisabledBootstrap: bootstrapDisabled,
+});
 console.log(JSON.stringify(result, null, 2));
 process.exit(0);

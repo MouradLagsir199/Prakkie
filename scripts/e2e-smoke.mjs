@@ -6,6 +6,7 @@
 const BASE = process.argv[2]?.startsWith('http')
   ? process.argv[2]
   : 'https://func-prakkie-api-dev.azurewebsites.net/api';
+const LIVE_CHAINS = 'ah,jumbo,plus,dirk,dekamarkt,aldi,vomar,hoogvliet,spar,ekoplaza';
 const urlArgIdx = process.argv.indexOf('--url');
 let RECIPE_URL = urlArgIdx > -1 ? process.argv[urlArgIdx + 1] : null;
 
@@ -25,6 +26,19 @@ const jfetch = async (path, init = {}, token) => {
     },
   });
   return { status: res.status, body: await res.json().catch(() => ({})) };
+};
+
+const productPackBase = (product) => {
+  const value = Number(product?.pack_size_value);
+  const unit = String(product?.pack_size_unit ?? '').trim().toLowerCase();
+  if (!Number.isFinite(value) || value <= 0) return null;
+  if (unit === 'kg') return { family: 'g', value: value * 1000 };
+  if (unit === 'g' || unit === 'gr') return { family: 'g', value };
+  if (unit === 'l' || unit === 'liter' || unit === 'litre') return { family: 'ml', value: value * 1000 };
+  if (unit === 'dl') return { family: 'ml', value: value * 100 };
+  if (unit === 'cl') return { family: 'ml', value: value * 10 };
+  if (unit === 'ml') return { family: 'ml', value };
+  return null;
 };
 
 // 0. find a real recipe URL when none was given (Leukerecepten sitemap)
@@ -95,16 +109,17 @@ const gen = await jfetch(`/v1/lists/${lid}/generate`, {
 }, token);
 check('list-generate adds lines', gen.status === 200 && gen.body.added > 0, `added ${gen.body.added}`);
 
-// 5. price across chains (p95 target <2s warm)
+// 5. Price across every live chain. Unchosen recipe ingredients must remain
+// unmatched: name retrieval is browsing only; it never silently selects a SKU.
 const t2 = Date.now();
-const price = await jfetch(`/v1/lists/${lid}/price?chains=ah,jumbo,plus,dirk,spar,aldi`, {}, token);
+const price = await jfetch(`/v1/lists/${lid}/price?chains=${LIVE_CHAINS}`, {}, token);
 const priceMs = Date.now() - t2;
 const chains = price.body.chains ?? [];
-check('list-price returns chains', price.status === 200 && chains.length >= 4, `${chains.length} chains in ${(priceMs / 1000).toFixed(1)}s`);
+check('list-price returns all live chains', price.status === 200 && chains.length === 10, `${chains.length} chains in ${(priceMs / 1000).toFixed(1)}s`);
 const ah = chains.find((c) => c.chain_id === 'ah');
-check('AH pricing has matches + total', !!ah && ah.matched > 0 && ah.total_cents > 0,
+check('EAN-only: unchosen recipe lines stay unmatched', !!ah && ah.matched === 0 && ah.total_cents === 0,
   ah ? `${ah.matched} matched, total ${ah.total_cents}c, unmatched: ${ah.unmatched.join('/') || 'none'}` : 'no ah');
-check('pricing <5s (2s target warm)', priceMs < 5000, `${(priceMs / 1000).toFixed(1)}s`);
+check('uncomposed pricing <2s warm', priceMs < 2000, `${(priceMs / 1000).toFixed(1)}s`);
 
 // 6. compare + deals
 const cmp = await jfetch(`/v1/lists/${lid}/compare`, {}, token);
@@ -130,46 +145,37 @@ const pull = await jfetch(`/v1/sync?since=1970-01-01T00:00:00Z&entities=lists`, 
 const weekRow = (pull.body.changes?.lists?.rows ?? []).find((r) => r.id === wlid);
 check('week-tied list: week_start persists through sync', String(weekRow?.week_start ?? '').slice(0, 10) === monday, `got ${weekRow?.week_start}`);
 
-// 9. variant pinning (owner UX): user switches product; pricing uses the pinned sku
-const itemsRes = await jfetch(`/v1/lists/${lid}/price?chains=ah`, {}, token);
-const matchedLines = (itemsRes.body.chains?.[0]?.lines ?? []).filter((l) => l.matched);
+// 9. Explicit manual selection: choose one shortlist candidate and prove only
+// that user-confirmed SKU enters the total.
 const allItemRows = await jfetch(`/v1/sync?since=1970-01-01T00:00:00Z&entities=list_items`, {}, token);
-// find any line whose shortlist offers a real alternative to pin
-let firstMatched = null;
 let target = null;
 let alternative = null;
-for (const line of matchedLines) {
-  const row = (allItemRows.body.changes?.list_items?.rows ?? []).find((r) => r.id === line.item_id);
+for (const row of (allItemRows.body.changes?.list_items?.rows ?? []).filter((r) => r.list_id === lid)) {
   const term = encodeURIComponent(row?.item_normalised ?? row?.name ?? '');
   const shortRes = await jfetch(`/v1/match?item=${term}&chains=ah`, {}, token);
-  const alt = (shortRes.body.matches?.ah?.shortlist ?? []).find((s) => s.sku_id !== line.sku_id);
+  const alt = shortRes.body.matches?.ah?.shortlist?.[0];
   if (alt) {
-    firstMatched = line;
     target = row;
     alternative = alt;
     break;
   }
 }
-if (firstMatched) {
-  if (alternative) {
-    await jfetch('/v1/sync/push', {
-      method: 'POST',
-      body: JSON.stringify({
-        mutations: [{
-          entity: 'list_items', op: 'upsert', id: firstMatched.item_id, base_updated_at: null,
-          fields: { list_id: lid, name: target?.name ?? 'item', matches: { ...(target?.matches ?? {}), ah: { sku_id: alternative.sku_id, confidence: 1, user_pinned: true } } },
-        }],
-      }),
-    }, token);
-    const repriced = await jfetch(`/v1/lists/${lid}/price?chains=ah`, {}, token);
-    const line = (repriced.body.chains?.[0]?.lines ?? []).find((l) => l.item_id === firstMatched.item_id);
-    check('pinned variant drives the price (user can verify/switch)', line?.sku_id === alternative.sku_id,
-      `line sku ${line?.sku_id} vs pinned ${alternative.sku_id} ("${alternative.name}")`);
-  } else {
-    check('pinned variant drives the price (user can verify/switch)', true, 'skipped — shortlist had no alternative');
-  }
+if (target && alternative) {
+  await jfetch('/v1/sync/push', {
+    method: 'POST',
+    body: JSON.stringify({
+      mutations: [{
+        entity: 'list_items', op: 'upsert', id: target.id, base_updated_at: null,
+        fields: { list_id: lid, name: target.name ?? 'item', matches: { ...(target.matches ?? {}), ah: { sku_id: alternative.sku_id, confidence: 1, user_pinned: true, origin: 'user_confirmed' } } },
+      }],
+    }),
+  }, token);
+  const repriced = await jfetch(`/v1/lists/${lid}/price?chains=ah`, {}, token);
+  const line = (repriced.body.chains?.[0]?.lines ?? []).find((l) => l.item_id === target.id);
+  check('manual product choice drives the price', line?.matched === true && line?.sku_id === alternative.sku_id,
+    `line sku ${line?.sku_id} vs chosen ${alternative.sku_id} ("${alternative.name}")`);
 } else {
-  check('pinned variant drives the price', false, 'no matched line to pin');
+  check('manual product choice drives the price', false, 'no shortlist candidate to choose');
 }
 
 // 8. Ontdek feed (WS7) — crawled corpus + save-flow detail
@@ -243,5 +249,56 @@ if (shortlisted) {
     && after.body.matches?.ah?.best?.sku_id === altSku);
 }
 
-console.log(failures ? `\n${failures} FAILED` : '\nAll e2e checks passed (spine + WS7/WS8/WS9).');
+// 12. boodschappen-ontdek (plan/12; owner-redesign 2026-07-12): discover → categorie → producten
+const disc = await jfetch(`/v1/store/discover?chains=${LIVE_CHAINS}`, {}, token);
+check('store discover: 25 categorieën mét foto (alleen glutenvrij zonder panelen)', disc.status === 200
+  && disc.body.categories?.length === 25
+  && disc.body.categories.filter((d) => d.panel_count === 0).every((d) => d.slug === 'glutenvrij')
+  && disc.body.categories.every((d) => !!d.image_url),
+  `${disc.body.categories?.length} categorieën`);
+check('store discover: aanbevolen producten met vanaf-prijs (bonus, of vergelijk-loont-fallback)',
+  disc.status === 200 && (disc.body.aanbevolen?.length ?? 0) >= 5
+  && disc.body.aanbevolen.every((p) => p.head_term && p.chain && p.image_url
+    && Number.isInteger(p.min_price_cents) && p.chain_count >= 1 && Number.isInteger(p.offer_count)),
+  disc.body.aanbevolen?.[0] ? `top: ${disc.body.aanbevolen[0].head_term} vanaf €${(disc.body.aanbevolen[0].min_price_cents / 100).toFixed(2)} (${disc.body.aanbevolen[0].offer_count} aanbiedingen, ${disc.body.aanbevolen[0].chain_count} ketens)` : 'geen aanbevolen');
+const zuivel = await jfetch(`/v1/store/department/zuivel-eieren?chains=${LIVE_CHAINS}`, {}, token);
+const melkPanel = zuivel.body.panels?.find((p) => p.slug === 'halfvolle-melk');
+check('store categorie: subcategorieën mét aantal · vanaf-prijs · ketens · thumbnail',
+  zuivel.status === 200 && !!melkPanel
+  && melkPanel.product_count > 50 && melkPanel.min_price_cents > 0
+  && melkPanel.chain_count >= 8 && !!melkPanel.image_url,
+  melkPanel ? `halfvolle melk: ${melkPanel.product_count}p vanaf €${(melkPanel.min_price_cents / 100).toFixed(2)} bij ${melkPanel.chain_count} ketens` : `status ${zuivel.status}`);
+if (melkPanel) {
+  const prods = await jfetch(`/v1/store/category/${melkPanel.id}/products?chains=${LIVE_CHAINS}`, {}, token);
+  const chainsSeen = new Set((prods.body.products ?? []).map((p) => p.chain));
+  check('store panel products: cross-chain, CrossChainOption-vormig',
+    prods.status === 200 && prods.body.total > 50 && chainsSeen.size >= 8
+    && prods.body.products.every((p) => p.chain && p.sku_id && Number.isInteger(p.price_cents) && Number.isInteger(p.rank)),
+    `${prods.body.products?.length}/${prods.body.total} producten, ${chainsSeen.size} ketens`);
+  const zoek = await jfetch(`/v1/store/category/${melkPanel.id}/products?chains=ah&q=campina`, {}, token);
+  check('store panel zoeken-binnen-paneel', zoek.status === 200
+    && (zoek.body.products ?? []).every((p) => /campina|halfvolle/i.test(p.name)),
+    `${zoek.body.products?.length} hits voor "campina"`);
+  const liter = await jfetch(`/v1/store/category/${melkPanel.id}/products?chains=${LIVE_CHAINS}&q=1L&limit=300`, {}, token);
+  const literProducts = liter.body.products ?? [];
+  check('alternatieven zoeken: 1L toont uitsluitend exact 1 liter', liter.status === 200
+    && literProducts.length > 0
+    && literProducts.every((p) => {
+      const pack = productPackBase(p);
+      return pack?.family === 'ml' && pack.value === 1000;
+    }),
+    `${literProducts.length} exacte 1L-hits`);
+}
+
+const vijfhonderd = await jfetch(`/v1/store/search?chains=${LIVE_CHAINS}&q=500g&limit=300`, {}, token);
+const vijfhonderdProducts = vijfhonderd.body.products ?? [];
+check('normaal zoeken: 500g toont uitsluitend exact 500 gram', vijfhonderd.status === 200
+  && vijfhonderdProducts.length > 0
+  && vijfhonderdProducts.every((p) => {
+    const pack = productPackBase(p);
+    return pack?.family === 'g' && pack.value === 500;
+  }),
+  `${vijfhonderdProducts.length}/${vijfhonderd.body.total ?? 0} exacte 500g-hits`);
+
+console.log(failures ? `\n${failures} FAILED` : '\nAll e2e checks passed (spine + WS7/WS8/WS9 + store).');
 process.exit(failures ? 1 : 0);

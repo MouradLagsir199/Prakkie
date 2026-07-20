@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyPromo, reconcilePackSize } from './pack-size';
+import { applyPromo, parsePackSizeText, reconcilePackSize } from './pack-size';
 import { normaliseUnit } from './units';
 
 describe('reconcilePackSize', () => {
@@ -32,6 +32,26 @@ describe('reconcilePackSize', () => {
   it('treats float noise as an exact fit (3 × 0.2 ≈ 0.6)', () => {
     const r = reconcilePackSize({ neededValue: 0.2 * 3, packValue: 0.6, packPriceCents: 100 });
     expect(r.fitsExactly).toBe(true);
+  });
+});
+
+describe('parsePackSizeText', () => {
+  it('treats 2 x 180 g as one 360 g purchasable multipack', () => {
+    expect(parsePackSizeText('Mekkafood Lahmacun Turkse Pizza 2x180g')).toEqual({ value: 360, unit: 'g' });
+    expect(parsePackSizeText('Consenza Kiploempia 2 × 180 gr')).toEqual({ value: 360, unit: 'g' });
+  });
+
+  it('normalises ordinary metric sizes and decimal litres', () => {
+    expect(parsePackSizeText('Iglo Spinazie fijn gehakt 750 gram')).toEqual({ value: 750, unit: 'g' });
+    expect(parsePackSizeText('Frisdrank 6 x 1,5 l')).toEqual({ value: 9000, unit: 'ml' });
+  });
+
+  it('reads a piece count from the title instead of deriving a fractional count from price', () => {
+    expect(parsePackSizeText('Jumbo Fuji Appels 4 Stuks')).toEqual({ value: 4, unit: 'st' });
+  });
+
+  it('returns null when a title has no measurable pack size', () => {
+    expect(parsePackSizeText('Beemster Oud 48+ plakken')).toBeNull();
   });
 });
 

@@ -22,7 +22,13 @@ registerCrud({
 
 const PlanEntryBody = z.object({
   plan_id: z.string().uuid(),
-  recipe_id: z.string().uuid(),
+  // recept óf los cataloog-product (title + quantity/unit) — geen vrije tekst
+  // meer, anders klopt de import naar het boodschappenlijstje niet (owner 2026-07-10)
+  recipe_id: z.string().uuid().nullable().optional(),
+  title: z.string().min(1).max(200).nullable().optional(),
+  quantity: z.number().positive().nullable().optional(),
+  unit: z.string().max(20).nullable().optional(),
+  image_url: z.string().url().nullable().optional(),
   entry_date: z.string().date().nullable().optional(), // null = "Zonder datum" strip (H3)
   meal_slot: MealSlot.optional(),
   servings: z.number().int().positive(),

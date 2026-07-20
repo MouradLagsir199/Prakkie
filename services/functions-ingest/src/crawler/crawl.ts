@@ -36,7 +36,8 @@ async function fetchText(url: string, timeoutMs = 15_000): Promise<string | null
   const c = new AbortController();
   const t = setTimeout(() => c.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { headers: { 'user-agent': UA, accept: 'text/html,application/xml' }, signal: c.signal });
+    // '*/*' erbij: voedingscentrum.nl geeft anders 406 op zijn eigen sitemap (2026-07-07)
+    const res = await fetch(url, { headers: { 'user-agent': UA, accept: 'text/html,application/xml,application/xhtml+xml,*/*;q=0.8' }, signal: c.signal });
     if (!res.ok) return null;
     return await res.text();
   } catch {
@@ -74,9 +75,10 @@ async function discoverUrls(source: SourceRow, cap: number): Promise<string[]> {
     if (!xml) continue;
     for (const m of xml.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/g)) {
       const url = m[1]!;
-      if (url.endsWith('.xml') || url.endsWith('.xml.gz')) {
+      // child-sitemap herkennen: ook "sitemap.xml?page=2"-vormen (Drupal/24kitchen)
+      if (/\.xml(\.gz)?($|\?)/i.test(url) || /sitemap/i.test(url)) {
         // sitemap index: prefer recipe-ish children
-        if (queue.length < 20 && (/recip|recept|gerecht|post/i.test(url) || !include)) queue.push(url);
+        if (queue.length < 20 && (/recip|recept|gerecht|post|sitemap/i.test(url) || !include)) queue.push(url);
         continue;
       }
       if (include && !url.includes(include)) continue;

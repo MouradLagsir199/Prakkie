@@ -8,6 +8,10 @@ param location string = 'westeurope'
 // This subscription offer is LocationIsOfferRestricted for PG Flexible Server in westeurope;
 // Postgres gets its own location (northeurope = same EU geo, ~<10 ms from westeurope)
 param pgLocation string = 'northeurope'
+// AKS (backs Container Apps environments) hit ManagedEnvironmentCapacityHeavyUsageError on
+// westeurope 2026-07-14; northeurope already proven to work in this subscription (pgLocation).
+// Irrelevant for a weekly batch job's latency.
+param containerAppsLocation string = 'northeurope'
 @description('Override when the default name is blocked by a stale ARM reservation')
 param pgServerName string = 'pg-prakkie-{env}'
 param ownerEmail string
@@ -104,12 +108,18 @@ module rbac 'modules/rbac.bicep' = {
   }
 }
 
-module vision 'modules/vision.bicep' = {
+// OFF→EAN verrijking: geplande Container Apps Job (zie services/ean-enrichment)
+module enrichmentJob 'modules/enrichment-job.bicep' = {
   scope: rg
-  name: 'vision'
+  name: 'enrichment-job'
   params: {
     env: env
     location: location
+    containerAppsLocation: containerAppsLocation
+    keyVaultName: keyvault.outputs.keyVaultName
+    storageAccountName: storage.outputs.storageAccountName
+    pgHost: postgres.outputs.fullyQualifiedDomainName
+    logAnalyticsName: last(split(monitoring.outputs.logAnalyticsId, '/'))
   }
 }
 
@@ -139,3 +149,5 @@ output ingestFunctionAppName string = functionsIngest.outputs.functionAppName
 output keyVaultName string = keyvault.outputs.keyVaultName
 output pgFqdn string = postgres.outputs.fullyQualifiedDomainName
 output staticWebAppHostname string = staticWebApp.outputs.defaultHostname
+output enrichmentJobName string = enrichmentJob.outputs.jobName
+output enrichmentRegistryName string = enrichmentJob.outputs.registryName

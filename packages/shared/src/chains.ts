@@ -40,7 +40,7 @@ export const CHAINS: Record<ChainId, ChainInfo> = {
   jumbo: { id: 'jumbo', displayName: 'Jumbo', chip: 'JU', connector: 'jumbo', fullAssortment: true, hasProductUrls: true },
   plus: { id: 'plus', displayName: 'Plus', chip: 'PL', connector: 'plus', fullAssortment: true, hasProductUrls: true },
   dirk: { id: 'dirk', displayName: 'Dirk van den Broek', chip: 'DI', connector: 'detailresult', fullAssortment: true, hasProductUrls: true },
-  dekamarkt: { id: 'dekamarkt', displayName: 'DekaMarkt', chip: 'DE', connector: 'detailresult', fullAssortment: false, hasProductUrls: true },
+  dekamarkt: { id: 'dekamarkt', displayName: 'DekaMarkt', chip: 'DE', connector: 'detailresult', fullAssortment: true, hasProductUrls: true },
   aldi: { id: 'aldi', displayName: 'Aldi', chip: 'AL', connector: 'aldi', fullAssortment: false, hasProductUrls: true },
   vomar: { id: 'vomar', displayName: 'Vomar', chip: 'VO', connector: 'vomar', fullAssortment: true, hasProductUrls: true },
   hoogvliet: { id: 'hoogvliet', displayName: 'Hoogvliet', chip: 'HO', connector: 'hoogvliet', fullAssortment: true, hasProductUrls: true },
@@ -56,4 +56,15 @@ export const DEFAULT_HOME_CHAIN: ChainId = 'ah';
  * User-facing pickers offer only these; the rest show as "binnenkort"
  * (UX-audit C2). Vertical scaling flips a chain here once its connector runs.
  */
-export const LIVE_CHAIN_IDS: readonly ChainId[] = ['ah', 'jumbo', 'plus', 'dirk', 'spar', 'aldi'];
+export const LIVE_CHAIN_IDS: readonly ChainId[] = [
+  'ah',
+  'jumbo',
+  'plus',
+  'dirk',
+  'dekamarkt',
+  'aldi',
+  'vomar',
+  'hoogvliet',
+  'spar',
+  'ekoplaza',
+];

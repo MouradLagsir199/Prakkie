@@ -6,21 +6,28 @@
   "build": {
     "preview": {
       "distribution": "internal",
+      "autoIncrement": true,
       "android": {
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://func-prakkie-api-dev.azurewebsites.net/api"
+        "EXPO_PUBLIC_API_URL": "https://func-prakkie-api-dev.azurewebsites.net/api",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "670984534617-5jtjlgp8hsvluqsuhhaa51adr0lkki2t.apps.googleusercontent.com"
       }
     },
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://func-prakkie-api-dev.azurewebsites.net/api",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "670984534617-5jtjlgp8hsvluqsuhhaa51adr0lkki2t.apps.googleusercontent.com"
+      }
     },
     "production": {
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://func-prakkie-api-dev.azurewebsites.net/api"
+        "EXPO_PUBLIC_API_URL": "https://func-prakkie-api-dev.azurewebsites.net/api",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "670984534617-5jtjlgp8hsvluqsuhhaa51adr0lkki2t.apps.googleusercontent.com"
       }
     }
   },

@@ -1,55 +1,86 @@
 import { CHAIN_IDS, CHAINS, LIVE_CHAIN_IDS, type ChainId } from '@prakkie/shared';
-import { Check, ChevronRight, Minus, Plus, X } from 'lucide-react-native';
+import { Image } from 'expo-image';
+import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
+import * as ImagePicker from 'expo-image-picker';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useRouter } from 'expo-router';
+import { Camera, Check, ChevronRight, Plus, Sparkles, X } from 'lucide-react-native';
 import { useCallback, useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { syncNow } from '../../data';
-import { authedRequest, currentUser, login, register } from '../../data/api';
-import { invalidateHousehold, loadHousehold, type HouseholdInfo, type MemberInfo } from '../../data/households';
+import { ChainLogo } from '../../components/prakkie/ChainLogo';
+import { TourTarget } from '../../components/prakkie/OnboardingTour';
+import { clearLocalData, syncNow } from '../../data';
+import { authedRequest, currentUser, deleteAccount, login, logout, register } from '../../data/api';
+import { invalidateHousehold, loadHousehold, roleLabel, type HouseholdInfo, type MemberInfo } from '../../data/households';
 import { kv } from '../../data/kv';
+import { resetMyChainsForSession, setMyChainsForSession } from '../../data/lijst-flow';
+import { resetShoppingSessionCache } from '../../data/shopping-session-cache';
 import { confirmDialog, notice } from '../../lib/dialogs';
-import { colors, fonts, radius, type } from '../../theme/tokens';
+import { resetStoreSessionCache } from '../../store/api';
+import { colors, fonts, gradients, radius, shadows, type } from '../../theme/tokens';
 
 /**
- * Profiel — Bordje-Profiel.png 1:1 (vervangt de Prijzen-tab, owner 2026-07-06):
- * profielkaart met huishouden + leden-chips + invite, instellingen-rijen
- * (supers, taal, eenheden, porties, meldingen), premium-teaser, GDPR-voet.
- * Huishouden werkt op e-mail-invites; daarvoor is de account-rij nodig
- * (gast → e-mailaccount, bestaande data blijft).
+ * Profiel — premium redesign (Premium Tabs Redesign.dc.html, "Scherm: Profiel"):
+ * identiteitskaart (avatar + naam/e-mail, huishouden-rij met overlappende
+ * leden-avatars en gestreepte "+"), één instellingen-kaart met rijen
+ * (supers, taal, eenheden, porties, meldingen), Plus-banner, uitloggen als
+ * kale rode tekst. Huishouden werkt op e-mail-invites; daarvoor is de
+ * account-rij nodig (gast → e-mailaccount, bestaande data blijft).
  */
 
 interface PendingInvite { id: string; household_id: string; household_name: string; invited_by_name: string | null }
 
-const AVATAR_TINTS = ['#E7EEDD', '#F6E3D4', '#E3E9F6', '#F6E3F0'];
+interface QuotaCounter { used: number; limit: number }
+interface QuotaInfo {
+  prakkie?: QuotaCounter; import?: QuotaCounter; enrich?: QuotaCounter; generate?: QuotaCounter;
+  trial?: boolean; trial_expired?: boolean; trial_days_remaining?: number | null;
+}
+// 'prakkie' (AI-resolve) is gesloopt (owner 2026-07-13) — quota-rij mee weg
+const QUOTA_ROWS: Array<{ key: 'import' | 'enrich' | 'generate'; label: string }> = [
+  { key: 'import', label: 'Recept importeren' },
+  { key: 'enrich', label: 'Recept aanvullen' },
+  { key: 'generate', label: 'Recept genereren' },
+];
+
+// bleke tinten voor leden-avatars, met bijpassende initiaal-kleur (mockup)
+const AVATAR_TINTS = [
+  { bg: colors.badgeBg, fg: colors.primary },
+  { bg: '#F6E3D4', fg: colors.plusText },
+  { bg: '#E3E9F6', fg: colors.textSoft },
+  { bg: '#F6E3F0', fg: colors.textSoft },
+];
 
 export default function ProfielScreen() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const [name, setName] = useState('');
   const [email, setEmail] = useState<string | null>(null);
-  const [servings, setServings] = useState(2);
   const [chains, setChains] = useState<ChainId[]>([]);
   const [notifications, setNotifications] = useState(true);
   const [household, setHousehold] = useState<HouseholdInfo | null>(null);
   const [members, setMembers] = useState<MemberInfo[]>([]);
   const [invites, setInvites] = useState<PendingInvite[]>([]);
-  const [sheet, setSheet] = useState<'none' | 'invite' | 'household' | 'chains' | 'account'>('none');
-  const [inviteEmail, setInviteEmail] = useState('');
-  const [householdName, setHouseholdName] = useState('');
+  const [sheet, setSheet] = useState<'none' | 'chains' | 'account'>('none');
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [accEmail, setAccEmail] = useState('');
   const [accPassword, setAccPassword] = useState('');
   const [busy, setBusy] = useState(false);
+  const [quota, setQuota] = useState<QuotaInfo | null>(null);
 
   const refresh = useCallback(async () => {
     try {
       const res = await authedRequest('/v1/me');
       if (res.ok) {
         const me = (await res.json()) as {
-          display_name?: string | null; email?: string | null; default_servings?: number; home_chain_ids?: string[];
+          display_name?: string | null; email?: string | null;
+          home_chain_ids?: string[]; avatar_url?: string | null;
         };
         setName(me.display_name ?? '');
         setEmail(me.email ?? null);
-        setServings(me.default_servings ?? 2);
         setChains(((me.home_chain_ids ?? []) as ChainId[]).filter((c) => LIVE_CHAIN_IDS.includes(c)));
+        setAvatarUrl(me.avatar_url ?? null);
+        kv.setItem('prakkie.avatar', me.avatar_url ?? '').catch(() => {});
       }
     } catch {
       const u = await currentUser().catch(() => null);
@@ -57,6 +88,12 @@ export default function ProfielScreen() {
         setName(u.display_name ?? '');
         setEmail(u.email);
       }
+    }
+    try {
+      const q = await authedRequest('/v1/me/quota');
+      if (q.ok) setQuota((await q.json()) as QuotaInfo);
+    } catch {
+      /* offline */
     }
     const h = await loadHousehold(true);
     setHousehold(h.household);
@@ -85,49 +122,61 @@ export default function ProfielScreen() {
   function toggleChain(id: ChainId) {
     const next = chains.includes(id) ? chains.filter((c) => c !== id) : [...chains, id];
     setChains(next);
-    patchMe({ home_chain_ids: next.length ? next : ['ah'] });
+    const selected = next.length ? next : ['ah'];
+    setMyChainsForSession(selected);
+    resetShoppingSessionCache();
+    resetStoreSessionCache();
+    patchMe({ home_chain_ids: selected });
     kv.setItem('prakkie.homechain', next[0] ?? 'ah').catch(() => {});
-    kv.setItem('prakkie.mychains', JSON.stringify(next.length ? next : ['ah'])).catch(() => {});
+    kv.setItem('prakkie.mychains', JSON.stringify(selected)).catch(() => {});
   }
 
-  function bumpServings(delta: number) {
-    const next = Math.max(1, servings + delta);
-    setServings(next);
-    patchMe({ default_servings: next });
-  }
-
-  async function sendInvite() {
-    const target = inviteEmail.trim().toLowerCase();
-    if (!target || !household) return;
-    setBusy(true);
+/** profielfoto (owner 2026-07-07 avond): tik op je initialen → kies foto →
+   *  upload naar /v1/me/avatar. Zichtbaar op Profiel, in het huishouden-beheer
+   *  en in de header van Ontdek. */
+  async function pickAvatar() {
     try {
-      const res = await authedRequest(`/v1/households/${household.id}/invite`, {
-        method: 'POST',
-        body: JSON.stringify({ email: target }),
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.9,
       });
-      if (!res.ok) throw new Error(String(res.status));
-      setInviteEmail('');
-      setSheet('none');
-      notice('Uitgenodigd', `${target} ziet de uitnodiging zodra die inlogt met dat e-mailadres.`);
-    } catch {
-      notice('Niet gelukt', 'Uitnodigen vereist internet.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function createHousehold() {
-    const hhName = householdName.trim() || 'Thuis';
-    setBusy(true);
-    try {
-      const res = await authedRequest('/v1/households', { method: 'POST', body: JSON.stringify({ name: hhName }) });
-      if (!res.ok) throw new Error(String(res.status));
-      invalidateHousehold();
-      setHouseholdName('');
-      setSheet('invite'); // meteen door naar uitnodigen
-      await refresh();
-    } catch {
-      notice('Niet gelukt', 'Huishouden maken vereist internet.');
+      const asset = result.assets?.[0];
+      if (result.canceled || !asset?.uri) return;
+      setBusy(true);
+      // Telefoonfoto's zijn vaak groter dan de avatar-API accepteert. Verklein
+      // vóór de upload; dit voorkomt dat een 413 onterecht als netwerkfout voelt.
+      const context = ImageManipulator.manipulate(asset.uri);
+      context.resize({ width: 768, height: 768 });
+      const rendered = await context.renderAsync();
+      const compressed = await rendered.saveAsync({
+        base64: true,
+        compress: 0.72,
+        format: SaveFormat.JPEG,
+      });
+      if (!compressed.base64) throw new Error('De gekozen foto kon niet worden verwerkt.');
+      const res = await authedRequest('/v1/me/avatar', {
+        method: 'POST',
+        body: JSON.stringify({ data_base64: compressed.base64, content_type: 'image/jpeg' }),
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        let message = `Uploaden mislukt (${res.status}).`;
+        try {
+          const parsed = JSON.parse(detail) as { error?: string; message?: string };
+          message = parsed.message ?? parsed.error ?? message;
+        } catch {
+          // Niet iedere serverfout heeft een JSON-body.
+        }
+        throw new Error(message);
+      }
+      const body = (await res.json()) as { avatar_url: string };
+      setAvatarUrl(body.avatar_url);
+      kv.setItem('prakkie.avatar', body.avatar_url).catch(() => {});
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'De foto kon niet worden opgeslagen.';
+      notice('Foto niet opgeslagen', message);
     } finally {
       setBusy(false);
     }
@@ -156,6 +205,7 @@ export default function ProfielScreen() {
     try {
       if (mode === 'register') await register(em, accPassword, name || undefined);
       else await login(em, accPassword);
+      await kv.setItem('prakkie.authed', '1').catch(() => {});
       setAccPassword('');
       setSheet('none');
       invalidateHousehold();
@@ -169,62 +219,157 @@ export default function ProfielScreen() {
     }
   }
 
-  const initials = (name || email || 'P').slice(0, 2).toUpperCase();
+  /** Uitloggen (owner 2026-07-07): server-sessie sluiten, lokale replica wissen,
+   *  terug naar het inlogscherm. Zolang je níét uitlogt blijf je ingelogd —
+   *  tokens staan in SecureStore en overleven het sluiten van de app. */
+  async function doLogout() {
+    const ok = await confirmDialog({
+      title: 'Uitloggen?',
+      message: 'Je recepten en lijsten blijven veilig in je account — lokaal worden ze van dit toestel gehaald.',
+      confirmLabel: 'Uitloggen',
+      destructive: true,
+    });
+    if (!ok) return;
+    resetShoppingSessionCache();
+    resetStoreSessionCache();
+    resetMyChainsForSession();
+    await logout();
+    await clearLocalData().catch(() => {});
+    await kv.removeItem('prakkie.authed').catch(() => {});
+    await kv.removeItem('prakkie.onboarded').catch(() => {});
+    // caches van deze gebruiker horen niet bij de volgende
+    await kv.removeItem('prakkie.mychains').catch(() => {});
+    await kv.removeItem('prakkie.homechain').catch(() => {});
+    router.replace('/login');
+  }
+
+  async function doDeleteAccount() {
+    const ok = await confirmDialog({
+      title: 'Account definitief verwijderen?',
+      message: 'Je toegang, profiel en sessies worden direct verwijderd. Deze actie kun je niet ongedaan maken.',
+      confirmLabel: 'Verwijder account',
+      destructive: true,
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await deleteAccount();
+      resetShoppingSessionCache();
+      resetStoreSessionCache();
+      resetMyChainsForSession();
+      await clearLocalData().catch(() => {});
+      await Promise.all([
+        kv.removeItem('prakkie.authed'), kv.removeItem('prakkie.onboarded'),
+        kv.removeItem('prakkie.mychains'), kv.removeItem('prakkie.homechain'), kv.removeItem('prakkie.avatar'),
+      ]).catch(() => {});
+      router.replace('/login');
+    } catch (error) {
+      notice('Verwijderen mislukt', error instanceof Error ? error.message : 'Probeer het opnieuw.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const initial = (name || email || 'P').slice(0, 1).toUpperCase();
   const others = members.filter((m) => (m.display_name ?? m.email ?? '') !== (name || email || ''));
 
-  const row = (label: string, right: React.ReactNode, onPress?: () => void, last = false) => (
-    <Pressable style={[styles.settingRow, !last && styles.settingBorder]} onPress={onPress} disabled={!onPress}>
-      <Text style={styles.settingLabel}>{label}</Text>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>{right}</View>
-    </Pressable>
-  );
+  function setNotificationsPref(v: boolean) {
+    setNotifications(v);
+    kv.setItem('prakkie.notifications', v ? '1' : '0').catch(() => {});
+  }
+
+  const row = (
+    label: string,
+    right: React.ReactNode,
+    onPress?: () => void,
+    last = false,
+    targetId?: string,
+  ) => {
+    const content = (
+      <Pressable
+        style={[styles.settingRow, !last && styles.settingBorder]}
+        onPress={onPress}
+        disabled={!onPress}
+        accessibilityRole={onPress ? 'button' : undefined}
+        accessibilityLabel={onPress ? label : undefined}
+      >
+        <Text style={styles.settingLabel}>{label}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>{right}</View>
+      </Pressable>
+    );
+    return targetId ? <TourTarget targetId={targetId}>{content}</TourTarget> : content;
+  };
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top + 8 }]}>
+    <View style={[styles.screen, { paddingTop: insets.top + 24 }]}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <Text style={styles.title}>Profiel</Text>
+        <Text style={type.screenTitle}>Profiel</Text>
 
-        {/* profielkaart — avatar, naam, huishouden, leden + invite */}
+        {/* identiteitskaart — tik de foto/initiaal om een profielfoto te kiezen */}
         <View style={styles.profileCard}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{initials}</Text>
+          <View style={styles.profileTop}>
+            <Pressable onPress={pickAvatar} accessibilityLabel="Profielfoto wijzigen" style={styles.avatarWrap}>
+              <View style={styles.avatar}>
+                {avatarUrl ? (
+                  <Image source={{ uri: avatarUrl }} style={styles.avatarImg} contentFit="cover" />
+                ) : (
+                  <Text style={styles.avatarText}>{initial}</Text>
+                )}
+              </View>
+              <View style={styles.avatarEdit}>
+                <Camera size={11} color={colors.onPrimary} strokeWidth={2.4} />
+              </View>
+            </Pressable>
+            <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+              <TextInput
+                style={styles.nameInput}
+                value={name}
+                placeholder="Jouw naam"
+                placeholderTextColor={colors.textMuted2}
+                onChangeText={setName}
+                onEndEditing={() => name.trim() && patchMe({ display_name: name.trim() })}
+              />
+              <Text style={styles.emailText} numberOfLines={1}>{email ?? 'gast — nog geen account gekoppeld'}</Text>
+            </View>
           </View>
-          <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-            <TextInput
-              style={styles.nameInput}
-              value={name}
-              placeholder="Jouw naam"
-              placeholderTextColor="#97A08F"
-              onChangeText={setName}
-              onEndEditing={() => name.trim() && patchMe({ display_name: name.trim() })}
-            />
-            <Text style={type.meta} numberOfLines={1}>
-              {household ? `Huishouden “${household.name}” · ${household.member_count} ${household.member_count === 1 ? 'persoon' : 'personen'}` : 'nog geen huishouden'}
+          <View style={styles.cardDivider} />
+          <View style={styles.householdRow}>
+            <Text style={styles.householdLabel} numberOfLines={1}>
+              {household ? `Groep “${household.name}”` : 'Nog geen groep'}
             </Text>
-          </View>
-          <View style={styles.memberRow}>
+            <View style={{ flex: 1 }} />
             {others.slice(0, 2).map((m, i) => (
-              <View key={m.user_id} style={[styles.memberChip, { backgroundColor: AVATAR_TINTS[i % AVATAR_TINTS.length] }]}>
-                <Text style={styles.memberChipText}>
-                  {(m.display_name ?? m.email ?? '?').slice(0, 1).toUpperCase()}
-                </Text>
+              <View
+                key={m.user_id}
+                style={[styles.memberChip, i > 0 && styles.memberOverlap, { backgroundColor: AVATAR_TINTS[i % AVATAR_TINTS.length].bg }]}
+              >
+                {m.avatar_url ? (
+                  <Image source={{ uri: m.avatar_url }} style={styles.memberChipImg} contentFit="cover" />
+                ) : (
+                  <Text style={[styles.memberChipText, { color: AVATAR_TINTS[i % AVATAR_TINTS.length].fg }]}>
+                    {(m.display_name ?? m.email ?? '?').slice(0, 1).toUpperCase()}
+                  </Text>
+                )}
               </View>
             ))}
-            <Pressable
-              style={[styles.memberChip, styles.memberAdd]}
-              onPress={async () => {
-                if (!email) {
-                  const link = await confirmDialog({
-                    title: 'Eerst een account',
-                    message: 'Huishoudens werken via e-mail — koppel eerst je e-mailadres.',
-                    confirmLabel: 'Account koppelen',
-                  });
-                  if (link) setSheet('account');
-                } else setSheet(household ? 'invite' : 'household');
-              }}
-            >
-              <Plus size={14} color={colors.textSoft} strokeWidth={2.2} />
-            </Pressable>
+            <TourTarget targetId="profile-group" style={others.length > 0 ? styles.memberOverlap : undefined}>
+              <Pressable
+                style={styles.memberAdd}
+                accessibilityLabel="Groep beheren"
+                onPress={async () => {
+                  if (!email) {
+                    const link = await confirmDialog({
+                      title: 'Eerst een account',
+                      message: 'Groepen werken via e-mail — koppel eerst je e-mailadres.',
+                      confirmLabel: 'Account koppelen',
+                    });
+                    if (link) setSheet('account');
+                  } else router.push('/huishouden');
+                }}
+              >
+                <Plus size={13} color={colors.textMuted2} strokeWidth={2.2} />
+              </Pressable>
+            </TourTarget>
           </View>
         </View>
 
@@ -244,93 +389,118 @@ export default function ProfielScreen() {
         {/* instellingen-rijen — mockup-volgorde */}
         <View style={styles.card}>
           {row(
+            'Groep',
+            <>
+              <Text style={styles.settingValue} numberOfLines={1}>
+                {household ? `“${household.name}” · ${roleLabel(household.role)}` : 'aanmaken'}
+              </Text>
+              <ChevronRight size={15} color={colors.textDisabled} strokeWidth={2} />
+            </>,
+            () => router.push('/huishouden'),
+            false,
+          )}
+          {row(
             'Mijn supermarkten',
             <>
-              {(chains.length ? chains : (['ah'] as ChainId[])).slice(0, 3).map((c) => (
-                <View key={c} style={styles.superChip}>
-                  <Text style={styles.superChipText}>{CHAINS[c].chip}</Text>
+              {(chains.length ? chains : (['ah'] as ChainId[])).slice(0, 4).map((c, i) => (
+                <View key={c} style={i > 0 ? styles.chainOverlap : undefined}>
+                  <ChainLogo id={c} size={22} />
                 </View>
               ))}
-              {chains.length > 3 ? <Text style={type.meta}>+{chains.length - 3}</Text> : null}
-              <ChevronRight size={15} color={colors.textMuted} />
+              {chains.length > 4 ? <Text style={type.meta}>+{chains.length - 4}</Text> : null}
+              <ChevronRight size={15} color={colors.textDisabled} strokeWidth={2} />
             </>,
-            () => setSheet('chains')
+            () => setSheet('chains'),
+            false,
+            'profile-chains',
           )}
           {row('Account', (
             <>
               <Text style={styles.settingValue} numberOfLines={1}>{email ?? 'gast'}</Text>
-              <ChevronRight size={15} color={colors.textMuted} />
+              <ChevronRight size={15} color={colors.textDisabled} strokeWidth={2} />
             </>
           ), () => setSheet('account'))}
-          {row('Taal', (
-            <>
-              <Text style={styles.settingValue}>Nederlands</Text>
-              <ChevronRight size={15} color={colors.textMuted} />
-            </>
-          ), () => notice('Binnenkort', 'Meer talen volgen.'))}
-          {row('Eenheden', (
-            <>
-              <Text style={styles.settingValue}>Metrisch</Text>
-              <ChevronRight size={15} color={colors.textMuted} />
-            </>
-          ), () => notice('Binnenkort', 'Imperial volgt.'))}
-          {row(
-            'Standaard porties',
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <Pressable onPress={() => bumpServings(-1)} hitSlop={8} style={styles.stepBtn}>
-                <Minus size={13} color={colors.text} />
-              </Pressable>
-              <Text style={[styles.settingValue, { color: colors.text, minWidth: 16, textAlign: 'center' }]}>{servings}</Text>
-              <Pressable onPress={() => bumpServings(1)} hitSlop={8} style={styles.stepBtn}>
-                <Plus size={13} color={colors.text} />
-              </Pressable>
-            </View>
-          )}
           {row(
             'Meldingen',
-            <Switch
-              value={notifications}
-              onValueChange={(v) => {
-                setNotifications(v);
-                kv.setItem('prakkie.notifications', v ? '1' : '0').catch(() => {});
-              }}
-              trackColor={{ true: colors.primary, false: '#D9D4C5' }}
-              thumbColor="#FFFFFF"
-            />,
+            <Pressable
+              accessibilityRole="switch"
+              accessibilityState={{ checked: notifications }}
+              accessibilityLabel="Meldingen"
+              hitSlop={8}
+              onPress={() => setNotificationsPref(!notifications)}
+              style={[styles.toggle, notifications && styles.toggleOn]}
+            >
+              <View style={[styles.toggleKnob, notifications && styles.toggleKnobOn]} />
+            </Pressable>,
             undefined,
-            true
+            true,
           )}
         </View>
 
-        {/* premium-teaser — betalingen zijn bewust uitgeschakeld */}
-        <Pressable
-          style={styles.premiumCard}
-          onPress={() => notice('Premium komt later', 'Alles is nu gratis tijdens de testfase.')}
-        >
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Text style={styles.premiumTitle}>Prakkie Premium</Text>
-            <View style={styles.premiumBadge}>
-              <Text style={styles.premiumBadgeText}>PROEF 14</Text>
-            </View>
+        {/* AI-tegoed als gewone instellingenkaart: rustig en herkenbaar. */}
+        <View style={styles.quotaCard}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Sparkles size={14} color={colors.primary} strokeWidth={2.2} />
+            <Text style={styles.quotaTitle}>AI-tegoed deze maand</Text>
+            <View style={{ flex: 1 }} />
+            <Text style={styles.quotaPlan}>
+              {quota == null
+                ? ''
+                : quota.trial
+                  ? quota.trial_expired
+                    ? 'proefperiode verlopen'
+                    : `proefperiode · ${quota.trial_days_remaining ?? 0} ${quota.trial_days_remaining === 1 ? 'dag' : 'dagen'} over`
+                  : 'Prakkie Plus · €2,99/mnd'}
+            </Text>
           </View>
-          <Text style={styles.premiumBody}>
-            Onbeperkt video-imports, prijsvergelijking over alle ketens, gedeeld huishouden en voorraad-intelligentie.
-          </Text>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-            <View style={styles.premiumPrice}>
-              <Text style={styles.premiumPriceText}>€2,99 / maand</Text>
+          {QUOTA_ROWS.map(({ key, label }, i) => {
+            const c = quota?.[key];
+            return (
+              <View key={key} style={[styles.quotaRow, i > 0 && styles.quotaRowBorder]}>
+                <Text style={styles.quotaLabel}>{label}</Text>
+                <Text style={styles.quotaValue}>
+                  {c ? `nog ${Math.max(0, c.limit - c.used)} van ${c.limit}` : '…'}
+                </Text>
+              </View>
+            );
+          })}
+        </View>
+
+        {/* premium-teaser (Plus-banner) — betalingen zijn bewust uitgeschakeld */}
+        <Pressable onPress={() => notice('Premium komt later', 'Alles is nu gratis tijdens de testfase.')}>
+          <LinearGradient colors={gradients.plus} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.premiumCard}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text style={styles.premiumTitle}>Prakkie Plus</Text>
+              <View style={styles.premiumBadge}>
+                <Text style={styles.premiumBadgeText}>
+                  {quota?.trial === false
+                    ? 'JOUW PLAN'
+                    : quota?.trial_expired
+                      ? 'PROEF VERLOPEN'
+                      : `NOG ${quota?.trial_days_remaining ?? 0} ${quota?.trial_days_remaining === 1 ? 'DAG' : 'DAGEN'}`}
+                </Text>
+              </View>
             </View>
-            <Text style={[styles.premiumBody, { flex: 1, fontFamily: fonts.bodyBold }]}>of eenmalig €39 — voor altijd</Text>
-          </View>
-          <Text style={styles.premiumFootnote}>Je eigen recepten blijven altijd gratis en van jou.</Text>
+            <Text style={styles.premiumBody}>
+              Onbeperkt video-imports, prijsvergelijking over alle ketens, gedeelde groep en voorraad-intelligentie.
+            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <View style={styles.premiumPill}>
+                <Text style={styles.premiumPillText}>€2,99 / maand</Text>
+              </View>
+            </View>
+            <Text style={styles.premiumFootnote}>Je eigen recepten blijven altijd gratis en van jou.</Text>
+          </LinearGradient>
+        </Pressable>
+
+        {/* uitloggen — sessie blijft anders gewoon bewaard bij het sluiten van de app */}
+        <Pressable style={styles.logoutRow} onPress={doLogout} accessibilityRole="button">
+          <Text style={styles.logoutText}>Uitloggen</Text>
         </Pressable>
 
         <View style={styles.gdprRow}>
-          <Pressable onPress={() => notice('Binnenkort', 'Data-export komt vóór de store-release.')}>
-            <Text style={styles.gdprExport}>Exporteer mijn data</Text>
-          </Pressable>
-          <Pressable onPress={() => notice('Binnenkort', 'Account verwijderen komt vóór de store-release.')}>
-            <Text style={styles.gdprDelete}>Verwijder account</Text>
+          <Pressable disabled={busy} onPress={doDeleteAccount}>
+            <Text style={[styles.gdprDelete, busy && { opacity: 0.5 }]}>Verwijder account</Text>
           </Pressable>
         </View>
       </ScrollView>
@@ -339,51 +509,13 @@ export default function ProfielScreen() {
       {sheet !== 'none' ? (
         <View style={[styles.sheet, { paddingBottom: insets.bottom + 100 }]}>
           <View style={styles.sheetHeader}>
-            <Text style={type.h3}>
-              {sheet === 'invite' ? 'Nodig iemand uit' : sheet === 'household' ? 'Nieuw huishouden'
-                : sheet === 'chains' ? 'Mijn supermarkten' : 'Account'}
-            </Text>
+            <Text style={type.h3}>{sheet === 'chains' ? 'Mijn supermarkten' : 'Account'}</Text>
             <Pressable onPress={() => setSheet('none')} hitSlop={10}>
               <X size={20} color={colors.textSoft} />
             </Pressable>
           </View>
 
-          {sheet === 'invite' ? (
-            <>
-              <Text style={type.meta}>
-                Diegene ziet de uitnodiging in Prakkie na inloggen met dit e-mailadres — jullie delen dan de boodschappen.
-              </Text>
-              <View style={styles.sheetInputRow}>
-                <TextInput
-                  style={[styles.input, { flex: 1 }]}
-                  placeholder="naam@voorbeeld.nl"
-                  placeholderTextColor="#97A08F"
-                  autoCapitalize="none"
-                  keyboardType="email-address"
-                  value={inviteEmail}
-                  onChangeText={setInviteEmail}
-                  onSubmitEditing={sendInvite}
-                />
-                <Pressable style={styles.sheetBtn} onPress={sendInvite} disabled={busy}>
-                  <Text style={styles.sheetBtnText}>{busy ? '…' : 'Stuur'}</Text>
-                </Pressable>
-              </View>
-            </>
-          ) : sheet === 'household' ? (
-            <View style={styles.sheetInputRow}>
-              <TextInput
-                style={[styles.input, { flex: 1 }]}
-                placeholder="Naam, bijv. Thuis"
-                placeholderTextColor="#97A08F"
-                value={householdName}
-                onChangeText={setHouseholdName}
-                onSubmitEditing={createHousehold}
-              />
-              <Pressable style={styles.sheetBtn} onPress={createHousehold} disabled={busy}>
-                <Text style={styles.sheetBtnText}>{busy ? '…' : 'Maak'}</Text>
-              </Pressable>
-            </View>
-          ) : sheet === 'chains' ? (
+          {sheet === 'chains' ? (
             <View style={{ gap: 8 }}>
               {CHAIN_IDS.map((id) => {
                 const live = LIVE_CHAIN_IDS.includes(id);
@@ -395,6 +527,7 @@ export default function ProfielScreen() {
                     onPress={() => toggleChain(id)}
                     style={[styles.chainRow, on && styles.chainRowOn, !live && { opacity: 0.4 }]}
                   >
+                    <ChainLogo id={id} size={26} />
                     <Text style={[type.body, { flex: 1 }, on && { color: colors.primary, fontFamily: fonts.bodySemiBold }]}>
                       {CHAINS[id].displayName}
                       {!live ? '  · binnenkort' : on && chains[0] === id ? '  · jouw winkel' : ''}
@@ -409,12 +542,12 @@ export default function ProfielScreen() {
               <Text style={type.meta}>
                 {email
                   ? `Ingelogd als ${email}. Op een ander toestel inloggen = zelfde recepten en lijsten.`
-                  : 'Koppel een e-mailaccount: nodig voor huishoudens, en je data reist mee naar elk toestel. Je blijft dezelfde gebruiker — niets gaat verloren.'}
+                  : 'Koppel een e-mailaccount: nodig voor groepen, en je data reist mee naar elk toestel. Je blijft dezelfde gebruiker — niets gaat verloren.'}
               </Text>
               <TextInput
                 style={styles.input}
                 placeholder="e-mailadres"
-                placeholderTextColor="#97A08F"
+                placeholderTextColor={colors.textMuted2}
                 autoCapitalize="none"
                 keyboardType="email-address"
                 value={accEmail}
@@ -423,7 +556,7 @@ export default function ProfielScreen() {
               <TextInput
                 style={styles.input}
                 placeholder="wachtwoord (min. 8 tekens)"
-                placeholderTextColor="#97A08F"
+                placeholderTextColor={colors.textMuted2}
                 secureTextEntry
                 value={accPassword}
                 onChangeText={setAccPassword}
@@ -446,25 +579,40 @@ export default function ProfielScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
-  content: { paddingHorizontal: 20, paddingBottom: 150, gap: 14 },
-  title: { fontFamily: fonts.display, fontSize: 29, lineHeight: 32, color: colors.text },
+  content: { paddingHorizontal: 20, paddingBottom: 150, gap: 16 },
   profileCard: {
-    flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: colors.surface,
-    borderRadius: 18, padding: 14, borderWidth: 1, borderColor: 'rgba(34,48,30,.08)',
+    backgroundColor: colors.surface, borderRadius: radius.card, padding: 18, gap: 14,
+    borderWidth: 1, borderColor: colors.borderSubtle, ...shadows.card,
   },
+  profileTop: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  avatarWrap: { position: 'relative' },
   avatar: {
-    width: 52, height: 52, borderRadius: 26, backgroundColor: '#22301E',
-    alignItems: 'center', justifyContent: 'center',
+    width: 54, height: 54, borderRadius: 27, backgroundColor: colors.badgeBg,
+    alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
   },
-  avatarText: { fontSize: 17, fontFamily: fonts.bodyBold, color: '#FDFBF6' },
-  nameInput: { fontSize: 17, fontFamily: fonts.bodyBold, color: colors.text, padding: 0 },
-  memberRow: { flexDirection: 'row', alignItems: 'center' },
+  avatarImg: { width: 54, height: 54 },
+  avatarEdit: {
+    position: 'absolute', right: -2, bottom: -2, width: 20, height: 20, borderRadius: 10,
+    backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1.5, borderColor: colors.surface,
+  },
+  avatarText: { fontFamily: fonts.display, fontSize: 22, color: colors.primary },
+  nameInput: { fontSize: 16, fontFamily: fonts.bodySemiBold, color: colors.text, padding: 0 },
+  emailText: { fontSize: 12, fontFamily: fonts.body, color: colors.textMuted },
+  cardDivider: { height: 1, backgroundColor: 'rgba(34,48,30,0.07)' },
+  householdRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  householdLabel: { fontSize: 12.5, fontFamily: fonts.bodySemiBold, color: colors.textSoft, flexShrink: 1 },
   memberChip: {
-    width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center',
-    marginLeft: -6, borderWidth: 1.5, borderColor: colors.surface,
+    width: 26, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center',
+    borderWidth: 2, borderColor: colors.surface, overflow: 'hidden',
   },
-  memberChipText: { fontSize: 11, fontFamily: fonts.bodyBold, color: colors.textSoft },
-  memberAdd: { backgroundColor: '#F0EDE3' },
+  memberChipImg: { width: 26, height: 26 },
+  memberChipText: { fontSize: 11, fontFamily: fonts.bodyBold },
+  memberOverlap: { marginLeft: -12 },
+  memberAdd: {
+    width: 26, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.surfaceMuted, borderWidth: 1.5, borderStyle: 'dashed', borderColor: 'rgba(34,48,30,0.2)',
+  },
   inviteStrip: {
     flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.badgeBg,
     borderRadius: 14, paddingHorizontal: 13, paddingVertical: 11,
@@ -474,45 +622,65 @@ const styles = StyleSheet.create({
   },
   inviteAcceptText: { fontSize: 12, fontFamily: fonts.bodySemiBold, color: colors.onPrimary },
   card: {
-    backgroundColor: colors.surface, borderRadius: 18, borderWidth: 1, borderColor: 'rgba(34,48,30,.08)',
-    overflow: 'hidden',
+    backgroundColor: colors.surface, borderRadius: radius.card, borderWidth: 1,
+    borderColor: colors.borderSubtle, ...shadows.card,
   },
   settingRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 15, gap: 10,
+    paddingHorizontal: 16, paddingVertical: 14, gap: 12,
   },
-  settingBorder: { borderBottomWidth: 1, borderBottomColor: 'rgba(34,48,30,.06)' },
-  settingLabel: { fontSize: 14.5, fontFamily: fonts.bodyBold, color: colors.text },
-  settingValue: { fontSize: 13.5, color: colors.textMuted, maxWidth: 170 },
-  superChip: {
-    paddingHorizontal: 10, paddingVertical: 5, borderRadius: radius.pill, backgroundColor: colors.badgeBg,
+  settingBorder: { borderBottomWidth: 1, borderBottomColor: 'rgba(34,48,30,0.06)' },
+  settingLabel: { fontSize: 13.5, fontFamily: fonts.bodyMedium, color: colors.text },
+  settingValue: { fontSize: 13, fontFamily: fonts.body, color: colors.textMuted, maxWidth: 170 },
+  chainOverlap: { marginLeft: -8 },
+  toggle: {
+    width: 44, height: 26, borderRadius: 14, backgroundColor: '#D9D4C5',
+    justifyContent: 'center', paddingHorizontal: 3,
   },
-  superChipText: { fontSize: 11.5, fontFamily: fonts.bodyBold, color: colors.primary },
-  stepBtn: {
-    width: 26, height: 26, borderRadius: 13, backgroundColor: colors.bg, alignItems: 'center',
-    justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(34,48,30,.12)',
+  toggleOn: { backgroundColor: colors.primary },
+  toggleKnob: {
+    width: 20, height: 20, borderRadius: 10, backgroundColor: colors.cream, alignSelf: 'flex-start',
+    shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 2,
   },
-  premiumCard: { backgroundColor: '#22301E', borderRadius: 20, padding: 18, gap: 12 },
-  premiumTitle: { fontFamily: fonts.display, fontSize: 21, color: '#FDFBF6' },
-  premiumBadge: { backgroundColor: '#9CD08F', borderRadius: radius.pill, paddingHorizontal: 11, paddingVertical: 5 },
-  premiumBadgeText: { fontSize: 10.5, fontFamily: fonts.bodyBold, color: '#1E3317', letterSpacing: 0.6 },
-  premiumBody: { fontSize: 13, lineHeight: 19, color: 'rgba(253,251,246,.85)' },
-  premiumPrice: { backgroundColor: '#FDFBF6', borderRadius: radius.pill, paddingHorizontal: 15, paddingVertical: 10 },
-  premiumPriceText: { fontSize: 14, fontFamily: fonts.bodyBold, color: '#22301E' },
-  premiumFootnote: { fontSize: 11, color: 'rgba(253,251,246,.55)' },
-  gdprRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 4, marginTop: 2 },
-  gdprExport: { fontSize: 13.5, color: colors.textMuted },
+  toggleKnobOn: { alignSelf: 'flex-end' },
+  quotaCard: {
+    backgroundColor: colors.surface, borderRadius: radius.card, borderWidth: 1,
+    borderColor: colors.borderSubtle, paddingHorizontal: 16, paddingVertical: 14, gap: 0,
+    ...shadows.card,
+  },
+  quotaTitle: { fontSize: 13, fontFamily: fonts.bodyBold, color: colors.text },
+  quotaPlan: { fontSize: 11, fontFamily: fonts.bodySemiBold, color: colors.textMuted },
+  quotaRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingVertical: 9, marginTop: 2,
+  },
+  quotaRowBorder: { borderTopWidth: 1, borderTopColor: 'rgba(34,48,30,0.06)' },
+  quotaLabel: { fontSize: 13, fontFamily: fonts.bodyMedium, color: colors.text },
+  quotaValue: { fontSize: 12.5, fontFamily: fonts.bodyBold, color: colors.primary },
+  premiumCard: {
+    borderRadius: radius.card, borderWidth: 1, borderColor: colors.plusBorder,
+    paddingVertical: 16, paddingHorizontal: 18, gap: 10,
+  },
+  premiumTitle: { fontSize: 14, fontFamily: fonts.bodyBold, color: colors.bonusText },
+  premiumBadge: { backgroundColor: colors.bonusText, borderRadius: radius.pill, paddingHorizontal: 10, paddingVertical: 4 },
+  premiumBadgeText: { fontSize: 10, fontFamily: fonts.bodyBold, color: colors.plusBgTo, letterSpacing: 0.6 },
+  premiumBody: { fontSize: 11.5, lineHeight: 17, fontFamily: fonts.body, color: colors.plusText },
+  premiumPill: { backgroundColor: colors.bonusText, borderRadius: radius.pill, paddingHorizontal: 14, paddingVertical: 8 },
+  premiumPillText: { fontSize: 11.5, fontFamily: fonts.bodyBold, color: colors.plusBgTo },
+  premiumFootnote: { fontSize: 10.5, fontFamily: fonts.body, color: colors.plusText, opacity: 0.75 },
+  logoutRow: { alignItems: 'center', paddingVertical: 6 },
+  logoutText: { fontSize: 13, fontFamily: fonts.bodySemiBold, color: colors.danger },
+  gdprRow: { alignItems: 'center', paddingHorizontal: 4, marginTop: 2 },
   gdprDelete: { fontSize: 13.5, color: colors.danger },
   sheet: {
     position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: colors.surface,
-    borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: 20, gap: 12,
+    borderTopLeftRadius: radius.sheet, borderTopRightRadius: radius.sheet, padding: 20, gap: 12,
     shadowColor: '#000', shadowOpacity: 0.14, shadowRadius: 18, shadowOffset: { width: 0, height: -6 }, elevation: 12,
   },
   sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  sheetInputRow: { flexDirection: 'row', gap: 8 },
   input: {
-    backgroundColor: colors.bg, borderRadius: radius.control, paddingHorizontal: 14, paddingVertical: 12,
-    borderWidth: 1, borderColor: 'rgba(34,48,30,.12)', fontSize: 14, color: colors.text,
+    backgroundColor: colors.surfaceMuted, borderRadius: radius.control, paddingHorizontal: 14, paddingVertical: 12,
+    borderWidth: 1, borderColor: colors.borderControl, fontSize: 14, color: colors.text,
   },
   sheetBtn: {
     backgroundColor: colors.primary, borderRadius: radius.control, paddingHorizontal: 16,
@@ -521,8 +689,8 @@ const styles = StyleSheet.create({
   sheetBtnAlt: { backgroundColor: colors.badgeBg },
   sheetBtnText: { fontSize: 13.5, fontFamily: fonts.bodySemiBold, color: colors.onPrimary },
   chainRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.bg,
-    borderRadius: 13, paddingHorizontal: 14, paddingVertical: 12, borderWidth: 1.5, borderColor: 'rgba(34,48,30,.1)',
+    flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.surfaceMuted,
+    borderRadius: 13, paddingHorizontal: 14, paddingVertical: 12, borderWidth: 1.5, borderColor: colors.border,
   },
   chainRowOn: { borderColor: colors.primary, backgroundColor: colors.badgeBg },
 });

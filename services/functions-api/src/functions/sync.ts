@@ -96,6 +96,41 @@ app.http('sync-push', {
   }),
 });
 
+type Tx = Pick<import('pg').PoolClient, 'query'>;
+
+/** Rechten (owner 2026-07-07 avond): een 'viewer' in een huishouden ziet alles
+ *  maar mag níéts muteren — geen items afvinken, geen regels toevoegen, geen
+ *  gedeelde recepten bewerken. Eigen rijen (owner_id = ik) en expliciet met mij
+ *  gedeelde lijsten (shared_with) blijven schrijfbaar. */
+async function roleAllowsWrite(tx: Tx, householdId: unknown, userId: string): Promise<boolean> {
+  if (!householdId) return false;
+  const r = await tx.query(`SELECT role FROM app.household_members WHERE household_id = $1 AND user_id = $2`, [
+    householdId,
+    userId,
+  ]);
+  return r.rowCount === 1 && (r.rows[0] as { role: string }).role !== 'viewer';
+}
+
+async function mayWriteRow(tx: Tx, def: EntityDef, userId: string, row: Record<string, unknown>): Promise<boolean> {
+  if (def.scope === 'userKeyed') return true;
+  if (def.scope === 'ownerHousehold') {
+    if (row.owner_id === userId) return true;
+    if (def.sharedWith && Array.isArray(row.shared_with) && (row.shared_with as string[]).includes(userId)) return true;
+    return roleAllowsWrite(tx, row.household_id, userId);
+  }
+  const parentTable = def.scope === 'listChild' ? 'app.lists' : 'app.plans';
+  const parentId = def.scope === 'listChild' ? row.list_id : row.plan_id;
+  const p = await tx.query(
+    `SELECT owner_id, household_id${def.scope === 'listChild' ? ', shared_with' : ''} FROM ${parentTable} WHERE id = $1`,
+    [parentId]
+  );
+  const parent = p.rows[0] as { owner_id: string; household_id: unknown; shared_with?: string[] } | undefined;
+  if (!parent) return false;
+  if (parent.owner_id === userId) return true;
+  if (def.scope === 'listChild' && Array.isArray(parent.shared_with) && parent.shared_with.includes(userId)) return true;
+  return roleAllowsWrite(tx, parent.household_id, userId);
+}
+
 async function applyMutation(
   userId: string,
   def: EntityDef,
@@ -111,6 +146,10 @@ async function applyMutation(
     if (!existing.rowCount) {
       const anyRow = await tx.query(`SELECT 1 FROM ${def.table} WHERE id = $1`, [mutation.id]);
       if (anyRow.rowCount) return { ...base, status: 'forbidden' as const };
+    }
+    // zichtbaar ≠ schrijfbaar: alleen-lezen-leden worden hier gestopt
+    if (existing.rowCount && !(await mayWriteRow(tx, def, userId, existing.rows[0] as Record<string, unknown>))) {
+      return { ...base, status: 'forbidden' as const };
     }
 
     if (mutation.op === 'delete') {
@@ -138,6 +177,11 @@ async function applyMutation(
       (apply as Record<string, unknown>).checked_at = apply.checked ? new Date().toISOString() : null;
     }
 
+    // een rij ín een huishouden hangen (delen) vereist zelf schrijfrechten dáár
+    if ('household_id' in apply && apply.household_id && !(await roleAllowsWrite(tx, apply.household_id, userId))) {
+      return { ...base, status: 'forbidden' as const };
+    }
+
     if (serverRow) {
       const columns = Object.keys(apply);
       if (columns.length) {
@@ -157,12 +201,16 @@ async function applyMutation(
       }
       const columns = Object.keys(apply);
       const scopeColumns = def.scope === 'ownerHousehold' ? ['owner_id'] : def.scope === 'userKeyed' ? ['user_id'] : [];
-      // children: parent visibility is the insert gate
+      // children: parent visibility is the insert gate — mét schrijfrechten
+      // (viewers zien de lijst wel, maar voegen niets toe); expliciet gedeelde
+      // lijsten (shared_with) zijn voor die leden wél schrijfbaar
       if (def.scope === 'listChild' || def.scope === 'planChild') {
         const parentTable = def.scope === 'listChild' ? 'app.lists' : 'app.plans';
         const parentId = def.scope === 'listChild' ? apply.list_id : apply.plan_id;
+        const sharedClause = def.scope === 'listChild' ? ' OR $1 = ANY(t.shared_with)' : '';
         const parent = await tx.query(
-          `SELECT 1 FROM ${parentTable} t WHERE t.id = $2 AND (t.owner_id = $1 OR t.household_id IN (SELECT household_id FROM app.household_members WHERE user_id = $1))`,
+          `SELECT 1 FROM ${parentTable} t WHERE t.id = $2 AND (t.owner_id = $1
+             OR t.household_id IN (SELECT household_id FROM app.household_members WHERE user_id = $1 AND role <> 'viewer')${sharedClause})`,
           [userId, parentId]
         );
         if (!parent.rowCount) return { ...base, status: 'forbidden' as const };

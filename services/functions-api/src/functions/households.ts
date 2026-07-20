@@ -61,11 +61,13 @@ app.http('household-invite', {
   route: 'v1/households/{id}/invite',
   handler: handler(async (req) => {
     const claims = await requireAuth(req);
-    const member = await query(
-      `SELECT 1 FROM app.household_members WHERE household_id = $1 AND user_id = $2`,
+    // uitnodigen kan alleen de admin (owner 2026-07-07: rechtenmodel)
+    const member = await query<{ role: string }>(
+      `SELECT role FROM app.household_members WHERE household_id = $1 AND user_id = $2`,
       [req.params.id, claims.userId]
     );
     if (!member.rowCount) throw new HttpError(403, 'forbidden', 'Geen lid van dit huishouden');
+    if (member.rows[0]!.role !== 'owner') throw new HttpError(403, 'forbidden', 'Alleen de admin nodigt leden uit');
 
     // e-mail invite (owner UX 2026-07-06): stored server-side; the invitee sees
     // it under /v1/households/invites once signed in with that address
@@ -157,7 +159,7 @@ app.http('household-join', {
 });
 
 app.http('household-members', {
-  methods: ['GET', 'DELETE'],
+  methods: ['GET', 'DELETE', 'PATCH'],
   authLevel: 'anonymous',
   route: 'v1/households/{id}/members/{userId?}',
   handler: handler(async (req) => {
@@ -170,15 +172,32 @@ app.http('household-members', {
     if (req.method === 'DELETE') {
       const target = req.params.userId;
       if (me.rows[0]!.role !== 'owner' && target !== claims.userId) {
-        throw new HttpError(403, 'forbidden', 'Alleen de eigenaar verwijdert leden');
+        throw new HttpError(403, 'forbidden', 'Alleen de admin verwijdert leden');
       }
       await query(`DELETE FROM app.household_members WHERE household_id = $1 AND user_id = $2`, [req.params.id, target]);
       return json(204, undefined);
     }
+    if (req.method === 'PATCH') {
+      // rechten toedelen (owner 2026-07-07): alleen de admin; editor = mag
+      // bewerken, viewer = alleen lezen. Eigen rol wijzigen kan niet — er
+      // blijft altijd een admin over.
+      if (me.rows[0]!.role !== 'owner') throw new HttpError(403, 'forbidden', 'Alleen de admin wijzigt rollen');
+      const target = req.params.userId;
+      if (!target || target === claims.userId) throw new HttpError(400, 'invalid_target', 'Kies een ander lid');
+      const body = await parseBody(req, z.object({ role: z.enum(['editor', 'viewer']) }));
+      const updated = await query(
+        `UPDATE app.household_members SET role = $3 WHERE household_id = $1 AND user_id = $2 AND role <> 'owner' RETURNING role`,
+        [req.params.id, target, body.role]
+      );
+      if (!updated.rowCount) throw new HttpError(404, 'not_found', 'Lid niet gevonden');
+      return json(200, { user_id: target, role: body.role });
+    }
     const members = await query(
-      `SELECT hm.user_id, hm.role, hm.joined_at, u.display_name, u.email
+      `SELECT hm.user_id, hm.role, hm.joined_at, u.display_name, u.email, u.avatar_url,
+              (SELECT max(d.last_seen_at) FROM app.devices d WHERE d.user_id = hm.user_id) AS last_active_at
        FROM app.household_members hm JOIN app.users u ON u.id = hm.user_id
-       WHERE hm.household_id = $1`,
+       WHERE hm.household_id = $1
+       ORDER BY hm.joined_at`,
       [req.params.id]
     );
     return json(200, { members: members.rows });

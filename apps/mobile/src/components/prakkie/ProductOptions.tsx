@@ -1,11 +1,11 @@
 import { formatEuroCents } from '@prakkie/shared';
 import { Image } from 'expo-image';
-import { Check, Search } from 'lucide-react-native';
-import { useEffect, useState } from 'react';
+import { Check, ChevronDown, ChevronUp, Search } from 'lucide-react-native';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { authedRequest } from '../../data/api';
-import { CHAIN_BRAND, chainChip } from '../../data/chains';
-import { colors, fonts, type } from '../../theme/tokens';
+import { colors, fonts, radius, type } from '../../theme/tokens';
+import { ChainLogo } from './ChainLogo';
 
 /**
  * The product dropdown (owner UX 2026-07-06): the app never decides for you —
@@ -20,16 +20,44 @@ export interface ProductOption {
   brand?: string | null;
   price_cents: number;
   promo_price_cents?: number | null;
+  /** Quantity-aware basket cost returned by the replacement preview. */
+  line_price_cents?: number;
   image_url?: string | null;
   confidence?: number;
+  reliability?: number;
+  decision?: 'accepted' | 'review' | 'unavailable';
   /** herkomst van de match: eigen correctie > lexicon-hint > fuzzy/beeld */
-  source?: 'correction' | 'lexicon' | 'trgm' | 'image';
+  source?: 'ean' | 'correction' | 'lexicon' | 'trgm' | 'semantic';
+  /** server: "het gezochte product zelf" (roomboter) vs samengesteld (croissant) */
+  is_primary?: boolean;
   /** inhoud/gewicht — 300 g sandwichspread is geen 450 g */
   pack_size_value?: number | null;
   pack_size_unit?: string | null;
   unit_price_cents_per_std?: number | null;
   std_unit?: string | null;
+  /** bonus-details uit de catalogus — mechanic ("2e halve prijs") voedt de
+   *  oranje bonus-flag in de schap-bladeraar (owner 2026-07-10) */
+  promo?: { type?: string | null; mechanic?: string | null } | null;
+  /** Alleen bij afdelingsbreed zoeken: laat zien uit welk schap het resultaat komt. */
+  category_name?: string | null;
+  /** Catalog department, used to keep manual replacement search in-category. */
+  department_slug?: string | null;
+  /** Vervang-advies uit de picker-preview: zoveel stuks van dit pak dekken de
+   *  hoeveelheid van het origineel (800 g origineel ÷ 200 g pak → 4). */
+  suggested_qty?: number | null;
 }
+
+/** de tekst op de oranje bonus-flag: de mechanic als die er is, anders "Bonus" */
+export function promoLabel(o: ProductOption): string | null {
+  const onPromo = o.promo_price_cents != null && o.promo_price_cents < o.price_cents;
+  if (!onPromo && !o.promo) return null;
+  const mech = (o.promo?.mechanic ?? '').trim();
+  return mech ? mech.slice(0, 28) : 'Bonus';
+}
+
+/** het gezochte product zelf eerst (owner 2026-07-07, "roomboter vóór
+ *  croissants") — fallback op confidence voor responses zonder de vlag */
+const primaryRank = (o: ProductOption) => ((o.is_primary ?? (o.confidence ?? 0) >= 0.72) ? 0 : 1);
 
 /** 0,3 kg → "300 g"; 1,5 l → "1,5 l" */
 function formatStdQty(qty: number, stdUnit: string): string {
@@ -41,17 +69,224 @@ function formatStdQty(qty: number, stdUnit: string): string {
   return `${String(rounded).replace('.', ',')} ${stdUnit}`;
 }
 
+type VisiblePack = { label: string; baseUnit: 'g' | 'ml' | 'st'; baseValue: number };
+
+/** Product titles are often more complete than feed metadata (notably Jumbo).
+ * Keep display parsing aligned with the server matcher: the last explicit
+ * amount wins and a multipack remains visibly a multipack. */
+function visiblePackFromName(name: string): VisiblePack | null {
+  const matches = [...name.matchAll(
+    /\b(?:(\d+)\s*[x×]\s*)?(\d+(?:[.,]\d+)?)\s*(kg|kilo(?:gram)?|g|gr|gram|ml|cl|dl|l|liter|litre|stuks?|st)\b/gi
+  )];
+  const match = matches.at(-1);
+  if (!match) return null;
+  const multiplier = match[1] ? Number(match[1]) : 1;
+  const amount = Number(match[2]!.replace(',', '.'));
+  if (!Number.isFinite(multiplier) || !Number.isFinite(amount) || multiplier <= 0 || amount <= 0) return null;
+  const raw = match[3]!.toLowerCase();
+  const displayUnit = /^(?:kg|kilo|kilogram)$/.test(raw)
+    ? 'kg'
+    : /^(?:g|gr|gram)$/.test(raw)
+      ? 'g'
+      : /^(?:l|liter|litre)$/.test(raw)
+        ? 'l'
+        : ['ml', 'cl', 'dl'].includes(raw)
+          ? raw
+          : 'stuks';
+  const baseUnit: VisiblePack['baseUnit'] = displayUnit === 'kg' || displayUnit === 'g'
+    ? 'g'
+    : ['l', 'ml', 'cl', 'dl'].includes(displayUnit)
+      ? 'ml'
+      : 'st';
+  const factor = displayUnit === 'kg'
+    ? 1000
+    : displayUnit === 'l'
+      ? 1000
+      : displayUnit === 'cl'
+        ? 10
+        : displayUnit === 'dl'
+          ? 100
+          : 1;
+  const amountLabel = String(amount).replace('.', ',');
+  return {
+    label: multiplier > 1 ? `${multiplier} × ${amountLabel} ${displayUnit}` : `${amountLabel} ${displayUnit}`,
+    baseUnit,
+    baseValue: multiplier * amount * factor,
+  };
+}
+
+const unitFamily = (unit: string | null | undefined): VisiblePack['baseUnit'] | null => {
+  const folded = (unit ?? '').toLowerCase();
+  if (['kg', 'g', 'gr', 'gram'].includes(folded)) return 'g';
+  if (['l', 'ml', 'cl', 'dl', 'liter', 'litre'].includes(folded)) return 'ml';
+  if (['st', 'stuk', 'stuks'].includes(folded)) return 'st';
+  return null;
+};
+
+/** Comparable contents for client-side presentation ranking. The server is
+ * authoritative, but this keeps an exact-size option first while an older API
+ * deployment is still serving a pre-fix order. */
+export function productPackBase(o: Pick<
+  ProductOption,
+  'name' | 'pack_size_value' | 'pack_size_unit' | 'price_cents' | 'unit_price_cents_per_std' | 'std_unit'
+>): { value: number; unit: VisiblePack['baseUnit'] } | null {
+  const named = visiblePackFromName(o.name);
+  if (named) return { value: named.baseValue, unit: named.baseUnit };
+  if (o.pack_size_value != null && o.pack_size_unit) {
+    const unit = unitFamily(o.pack_size_unit);
+    if (unit) {
+      const raw = o.pack_size_unit.toLowerCase();
+      const factor = raw === 'kg' || raw === 'l' || raw === 'liter' || raw === 'litre'
+        ? 1000
+        : raw === 'cl'
+          ? 10
+          : raw === 'dl'
+            ? 100
+            : 1;
+      return { value: Number(o.pack_size_value) * factor, unit };
+    }
+  }
+  const unit = unitFamily(o.std_unit);
+  const price = Number(o.price_cents);
+  const unitPrice = Number(o.unit_price_cents_per_std);
+  if (!unit || !Number.isFinite(price) || !Number.isFinite(unitPrice) || price <= 0 || unitPrice <= 0) return null;
+  const factor = o.std_unit?.toLowerCase() === 'kg' || o.std_unit?.toLowerCase() === 'l' ? 1000 : 1;
+  return { value: (price / unitPrice) * factor, unit };
+}
+
+const RECOMMENDATION_NOISE = new Set([
+  'ah', 'albert', 'heijn', 'jumbo', 'aldi', 'plus', 'dirk', 'dekamarkt',
+  'vomar', 'hoogvliet', 'spar', 'picnic', 'ekoplaza',
+  'g', 'gr', 'gram', 'kg', 'kilo', 'ml', 'cl', 'dl', 'l', 'liter', 'litre',
+  'st', 'stuk', 'stuks', 'x',
+]);
+
+function recommendationTokens(value: string): string[] {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter((token) => token && !/^\d+(?:[.,]\d+)?$/.test(token) && !RECOMMENDATION_NOISE.has(token));
+}
+
+function recommendationTitleScore(anchorName: string, candidateName: string): number {
+  const anchor = recommendationTokens(anchorName);
+  const candidate = recommendationTokens(candidateName);
+  if (!anchor.length || !candidate.length) return 0;
+  const tokenFit = (wanted: string, available: string) => {
+    if (wanted === available) return 1;
+    if (wanted.length >= 4 && available.length >= 4 && (wanted.includes(available) || available.includes(wanted))) return 0.72;
+    return 0;
+  };
+  const coverage = (wanted: string[], available: string[]) =>
+    wanted.reduce((sum, token) => sum + Math.max(...available.map((other) => tokenFit(token, other))), 0) / wanted.length;
+  // Het origineel bepaalt vooral wat niet verloren mag gaan (scharrel,
+  // naturel, volkoren); kandidaatdekking voorkomt dat een lange irrelevante
+  // titel op één toevallig woord wint.
+  return coverage(anchor, candidate) * 0.72 + coverage(candidate, anchor) * 0.28;
+}
+
+function recommendationPackScore(
+  anchor: ReturnType<typeof productPackBase>,
+  candidate: ReturnType<typeof productPackBase>
+): number {
+  if (!anchor) return 0.45;
+  if (!candidate) return 0.08;
+  if (anchor.unit !== candidate.unit) return -0.6;
+  const ratio = candidate.value / anchor.value;
+  if (!Number.isFinite(ratio) || ratio <= 0) return 0;
+  // Exact dezelfde inhoud = 1. Een 600g-pak voor een 800g-anker zakt al
+  // duidelijk, waardoor een aanwezige 800g-variant bovenaan komt.
+  return Math.exp(-2.8 * Math.abs(Math.log(ratio)));
+}
+
+const PREPARED_RECOMMENDATION_CUES = [
+  /\b(?:bbq|barbecue|barbeque)\b/i,
+  /\bspies(?:je|jes)?\b|\bsat[eé]\b/i,
+  /\b(?:gemarineerd|gekruid)\b/i,
+];
+
+export function hasPreparedRecommendationCue(name: string): boolean {
+  return PREPARED_RECOMMENDATION_CUES.some((cue) => cue.test(name));
+}
+
+/** Keep the recommendation lane faithful to explicitly prepared products.
+ * A source such as "BBQ kipfilet spies" must not silently degrade to plain
+ * chicken just because the resolved retailer shelf is broad. Typed searches
+ * remain unrestricted because at that point the user explicitly controls the
+ * requested product. */
+function preparedCueMatches(anchorName: string, candidateName: string): number | null {
+  const active = PREPARED_RECOMMENDATION_CUES.filter((cue) => cue.test(anchorName));
+  if (!active.length) return null;
+  return active.filter((cue) => cue.test(candidateName)).length;
+}
+
+/** Sterke, uitlegbare rangschikking voor de handmatige alternatiefzoeker.
+ * De categorie is al server-side veilig begrensd; binnen dat schap wegen de
+ * semantische titel en vergelijkbare verpakkingsinhoud het zwaarst. */
+export function rankRecommendedProducts(
+  options: ProductOption[],
+  opts: {
+    anchor: Pick<ProductOption, 'name' | 'pack_size_value' | 'pack_size_unit' | 'price_cents' | 'unit_price_cents_per_std' | 'std_unit'>;
+    query?: string;
+    serverRankedSkus?: string[];
+  }
+): ProductOption[] {
+  const targetName = opts.query?.trim() || opts.anchor.name;
+  const anchorPack = productPackBase(opts.anchor);
+  const serverRank = new Map((opts.serverRankedSkus ?? []).map((sku, index) => [sku, index]));
+  return options
+    .filter((option) => {
+      if (opts.query?.trim()) return true;
+      const cueMatches = preparedCueMatches(opts.anchor.name, option.name);
+      return cueMatches == null || cueMatches > 0;
+    })
+    .map((option, index) => {
+      const title = recommendationTitleScore(targetName, option.name);
+      const pack = recommendationPackScore(anchorPack, productPackBase(option));
+      const cueMatches = preparedCueMatches(opts.anchor.name, option.name) ?? 0;
+      const knownRank = serverRank.get(option.sku_id);
+      // De prijs-engine kent vorm/canonical-name al. Gebruik die als kleine
+      // tie-breaker, nooit als vervanging van titel + hoeveelheid.
+      const serverHint = opts.query?.trim() || knownRank == null
+        ? 0
+        : Math.max(0, 0.035 - knownRank * 0.004);
+      return {
+        option,
+        index,
+        score: title * 0.66 + pack * 0.34 + cueMatches * 0.4 + serverHint,
+      };
+    })
+    .sort((a, b) =>
+      b.score - a.score ||
+      (a.option.promo_price_cents ?? a.option.price_cents) - (b.option.promo_price_cents ?? b.option.price_cents) ||
+      a.index - b.index
+    )
+    .map(({ option }) => option);
+}
+
 /** "300 g · €3,30/kg" — inhoud + eenheidsprijs, voor eerlijke vergelijking.
  *  Zonder expliciete pack-size wordt de inhoud afgeleid uit de eenheidsprijs
  *  (prijs ÷ prijs-per-kg) — dat is exact, want zo is die prijs ook berekend. */
 export function packLabel(o: ProductOption): string | null {
   const parts: string[] = [];
-  if (o.pack_size_value != null && o.pack_size_unit) {
+  const namedPack = visiblePackFromName(o.name);
+  let visibleUnit: VisiblePack['baseUnit'] | null = null;
+  if (namedPack) {
+    parts.push(namedPack.label);
+    visibleUnit = namedPack.baseUnit;
+  } else if (o.pack_size_value != null && o.pack_size_unit) {
     parts.push(`${String(o.pack_size_value).replace('.', ',')} ${o.pack_size_unit}`);
+    visibleUnit = unitFamily(o.pack_size_unit);
   } else if (o.unit_price_cents_per_std && o.std_unit && o.price_cents) {
     parts.push(formatStdQty(o.price_cents / o.unit_price_cents_per_std, o.std_unit));
+    visibleUnit = unitFamily(o.std_unit);
   }
-  if (o.unit_price_cents_per_std != null && o.std_unit) {
+  const stdUnit = unitFamily(o.std_unit);
+  if (o.unit_price_cents_per_std != null && o.std_unit && (!visibleUnit || !stdUnit || visibleUnit === stdUnit)) {
     parts.push(`${formatEuroCents(o.unit_price_cents_per_std)}/${o.std_unit}`);
   }
   return parts.length ? parts.join(' · ') : null;
@@ -64,32 +299,22 @@ export interface CrossChainOption extends ProductOption {
   chain: string;
   /** relevantie-rang binnen de eigen keten-shortlist (0 = beste match) */
   rank: number;
-  /** 1 = beste matches, 2 = "meer opties" onder de divider */
-  band: 1 | 2;
 }
 
-// Bandregel (owner 2026-07-07, "sperziebonen ≠ blik gebroken"): band 1 =
-// correctie/lexicon-hint (confidence 1.0 / 0.95) óf een top-3 fuzzy match
-// binnen de eigen keten mét een minimale zekerheid ÉN dicht bij de topscore
-// van die keten. Die laatste eis vangt schrale ketens: bij Aldi is "Gebroken
-// sperziebonen" (0.68, penalty gehad) alsnog rang 2 omdat er weinig aanbod is
-// — het gat met de top (0.90) verraadt dat het een mindere match is.
-const BAND1_PER_CHAIN = 3;
-const BAND1_MIN_CONF = 0.55; // trgm/beeld ≤ 0.9, lexicon 0.95, correctie 1.0
-const BAND1_MAX_GAP = 0.15; // t.o.v. de beste match binnen dezelfde keten
-const bandOf = (
-  o: { source?: string; rank: number; confidence?: number },
-  chainTopConf: number
-): 1 | 2 =>
-  o.source === 'correction' ||
-  o.source === 'lexicon' ||
-  (o.rank < BAND1_PER_CHAIN && (o.confidence ?? 0) >= BAND1_MIN_CONF && (o.confidence ?? 0) >= chainTopConf - BAND1_MAX_GAP)
-    ? 1
-    : 2;
+/** al-gekozen sku's per keten — worden altijd getoond, vooraan, met de échte
+ *  productnaam (owner-bug 2026-07-08: "Jumbo bruin brood" toonde geen vinkje
+ *  omdat de fuzzy matcher die sku toevallig niet zelf terugvond). */
+export type PinnedByChain = Record<string, string | undefined>;
 
-export function useCrossChainOptions(term: string | null, chains: readonly string[]) {
+export function useCrossChainOptions(term: string | null, chains: readonly string[], pinnedByChain?: PinnedByChain) {
   const [options, setOptions] = useState<CrossChainOption[] | null>(null);
   const chainKey = chains.join(',');
+  const pinnedKey = pinnedByChain
+    ? Object.entries(pinnedByChain)
+        .filter(([c, sku]) => !!sku && chains.includes(c))
+        .map(([c, sku]) => `${c}:${sku}`)
+        .join(',')
+    : '';
   useEffect(() => {
     if (!term || !chainKey) {
       setOptions(null);
@@ -97,27 +322,27 @@ export function useCrossChainOptions(term: string | null, chains: readonly strin
     }
     let live = true;
     setOptions(null);
-    authedRequest(`/v1/match?item=${encodeURIComponent(term)}&chains=${chainKey}`)
+    const pinnedParam = pinnedKey ? `&pinned=${encodeURIComponent(pinnedKey)}` : '';
+    authedRequest(`/v1/match?item=${encodeURIComponent(term)}&chains=${chainKey}${pinnedParam}`)
       .then(async (res) => {
         if (!res.ok) throw new Error(String(res.status));
         const body = (await res.json()) as { matches: Record<string, { shortlist: ProductOption[] }> };
-        const merged = chainKey.split(',').flatMap((c) => {
-          const shortlist = body.matches[c]?.shortlist ?? [];
-          const chainTopConf = Math.max(0, ...shortlist.map((o) => o.confidence ?? 0));
-          return shortlist.map((o, rank) => {
-            const tagged = { ...o, chain: c, rank } as CrossChainOption;
-            tagged.band = bandOf(tagged, chainTopConf);
-            return tagged;
-          });
-        });
-        // owner 2026-07-07 (2e iteratie): twee banden — beste matches boven,
-        // "meer opties" onder de divider; bínnen elke band puur prijs laag → hoog.
+        const merged = chainKey.split(',').flatMap((c) =>
+          (body.matches[c]?.shortlist ?? []).map((o, rank) => ({ ...o, chain: c, rank }) as CrossChainOption)
+        );
+        // owner 2026-07-07 (4e iteratie): één platte lijst, maar in lógische
+        // volgorde — eerst het gezochte product zelf (alle varianten, goedkoopste
+        // eerst), dan pas samengestelde producten (croissants, flappen), ook op prijs.
         merged.sort(
           (a, b) =>
-            a.band - b.band ||
+            primaryRank(a) - primaryRank(b) ||
             (a.promo_price_cents ?? a.price_cents) - (b.promo_price_cents ?? b.price_cents) ||
             a.rank - b.rank
         );
+        // de al-gekozen producten altijd bovenaan — ongeacht prijs/relevantie-
+        // sortering, zodat de user in één oogopslag ziet wat er al staat.
+        const pins = new Set(pinnedKey ? pinnedKey.split(',') : []);
+        merged.sort((a, b) => Number(pins.has(`${b.chain}:${b.sku_id}`)) - Number(pins.has(`${a.chain}:${a.sku_id}`)));
         if (live) setOptions(merged);
       })
       .catch(() => {
@@ -126,7 +351,7 @@ export function useCrossChainOptions(term: string | null, chains: readonly strin
     return () => {
       live = false;
     };
-  }, [term, chainKey]);
+  }, [term, chainKey, pinnedKey]);
   return options;
 }
 
@@ -140,26 +365,35 @@ export function CrossChainRow({
   chosen?: boolean;
   onPick: (option: CrossChainOption) => void;
 }) {
-  const brand = CHAIN_BRAND[option.chain];
   return (
-    <Pressable style={[styles.row, chosen && styles.rowChosen]} onPress={() => onPick(option)}>
+    <Pressable
+      style={[styles.row, chosen && styles.rowChosen]}
+      onPress={() => onPick(option)}
+      accessibilityRole="button"
+      accessibilityState={{ selected: !!chosen }}
+      accessibilityLabel={`Kies ${option.name} bij ${option.chain}`}
+    >
       {option.image_url ? (
         <Image source={{ uri: option.image_url }} style={styles.thumb} contentFit="contain" />
       ) : (
         <View style={[styles.thumb, styles.thumbEmpty]} />
       )}
       <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
+        {(() => {
+          const flag = promoLabel(option);
+          return flag ? (
+            <View style={styles.bonusFlag}>
+              <Text style={styles.bonusFlagText}>{flag}</Text>
+            </View>
+          ) : null;
+        })()}
         <Text style={styles.name} numberOfLines={2}>{option.name}</Text>
         {(() => {
-          const sub = [option.brand, packLabel(option)].filter(Boolean).join(' · ');
+          const sub = [option.category_name, option.brand, packLabel(option)].filter(Boolean).join(' · ');
           return sub ? <Text style={styles.brand} numberOfLines={1}>{sub}</Text> : null;
         })()}
       </View>
-      {brand ? (
-        <View style={[styles.chainBadge, { backgroundColor: brand.bg }]}>
-          <Text style={[styles.chainBadgeText, { color: brand.fg }]}>{chainChip(option.chain)}</Text>
-        </View>
-      ) : null}
+      <ChainLogo id={option.chain} size={22} />
       <View style={{ alignItems: 'flex-end', gap: 2 }}>
         {option.promo_price_cents != null && option.promo_price_cents < option.price_cents ? (
           <>
@@ -175,9 +409,8 @@ export function CrossChainRow({
   );
 }
 
-/** De gedeelde resultatenlijst: band-1-rijen, subtiel "MEER OPTIES"-kopje,
- *  band-2-rijen. Zonder twee zichtbare banden: exact de platte lijst. Eén
- *  component voor zoekpaneel én item-sheet, zodat ze nooit uiteenlopen. */
+/** De gedeelde resultatenlijst — één platte lijst met varianten, goedkoopste
+ *  eerst. Eén component voor zoekpaneel én item-sheet, zodat ze nooit uiteenlopen. */
 export function CrossChainList({
   options,
   maxRows = 30,
@@ -189,16 +422,10 @@ export function CrossChainList({
   currentSku?: string | null;
   onPick: (option: CrossChainOption) => void;
 }) {
-  const visible = options.slice(0, maxRows);
-  const dividerAt = visible.findIndex((o) => o.band === 2);
-  const showDivider = dividerAt > 0; // beide banden zichtbaar → kopje ertussen
   return (
     <View>
-      {visible.map((o, i) => (
-        <View key={`${o.chain}:${o.sku_id}`}>
-          {showDivider && i === dividerAt ? <Text style={styles.bandDivider}>MEER OPTIES</Text> : null}
-          <CrossChainRow option={o} chosen={o.sku_id === currentSku} onPick={onPick} />
-        </View>
+      {options.slice(0, maxRows).map((o) => (
+        <CrossChainRow key={`${o.chain}:${o.sku_id}`} option={o} chosen={o.sku_id === currentSku} onPick={onPick} />
       ))}
     </View>
   );
@@ -209,12 +436,15 @@ export function CrossChainOptions({
   term,
   chains,
   currentSku,
+  pinnedByChain,
   onPick,
   maxRows = 30,
 }: {
   term: string | null;
   chains: readonly string[];
   currentSku?: string | null;
+  /** al-gekozen sku per keten (chain → sku_id) — altijd zichtbaar, vooraan */
+  pinnedByChain?: PinnedByChain;
   onPick: (option: CrossChainOption) => void;
   /** ruim: liever scrollen dan een optie missen (owner 2026-07-07) */
   maxRows?: number;
@@ -225,16 +455,16 @@ export function CrossChainOptions({
     const t = setTimeout(() => setDebounced(search.trim()), 300);
     return () => clearTimeout(t);
   }, [search]);
-  const options = useCrossChainOptions(debounced || term, chains);
+  const options = useCrossChainOptions(debounced || term, chains, pinnedByChain);
 
   return (
     <View>
       <View style={styles.searchRow}>
-        <Search size={14} color="#97A08F" strokeWidth={2.2} />
+        <Search size={14} color={colors.textMuted2} strokeWidth={2.2} />
         <TextInput
           style={styles.searchInput}
-          placeholder={`Zoek in je supers: bijv. ${term ?? 'roomboter'} croissant…`}
-          placeholderTextColor="#97A08F"
+          placeholder={`Zoek in je supers: ${term ?? 'roomboter'} of 500 g…`}
+          placeholderTextColor={colors.textMuted2}
           value={search}
           onChangeText={setSearch}
           autoCapitalize="none"
@@ -251,17 +481,30 @@ export function CrossChainOptions({
   );
 }
 
-export function useProductOptions(term: string | null, chain: string) {
+export function useProductOptions(term: string | null, chain: string, enabled = true) {
   const [options, setOptions] = useState<ProductOption[] | null>(null);
   useEffect(() => {
-    if (!term) return;
+    if (!enabled) {
+      setOptions([]);
+      return;
+    }
+    if (!term) {
+      setOptions(null);
+      return;
+    }
     let live = true;
     setOptions(null);
     authedRequest(`/v1/match?item=${encodeURIComponent(term)}&chains=${chain}`)
       .then(async (res) => {
         if (!res.ok) throw new Error(String(res.status));
         const body = (await res.json()) as { matches: Record<string, { shortlist: ProductOption[] }> };
-        if (live) setOptions(body.matches[chain]?.shortlist ?? []);
+        // zelfde logische volgorde als cross-chain: eerst het product zelf, dan de rest
+        const sorted = [...(body.matches[chain]?.shortlist ?? [])].sort(
+          (a, b) =>
+            primaryRank(a) - primaryRank(b) ||
+            (a.promo_price_cents ?? a.price_cents) - (b.promo_price_cents ?? b.price_cents)
+        );
+        if (live) setOptions(sorted);
       })
       .catch(() => {
         if (live) setOptions([]);
@@ -269,7 +512,7 @@ export function useProductOptions(term: string | null, chain: string) {
     return () => {
       live = false;
     };
-  }, [term, chain]);
+  }, [term, chain, enabled]);
   return options;
 }
 
@@ -277,33 +520,62 @@ export function ProductOptions({
   term,
   chain,
   currentSku,
+  suggestedOptions = [],
   onPick,
   maxRows = 24,
+  initialRows = 6,
   searchable = true,
+  fetchFallback = true,
 }: {
   term: string | null;
   chain: string;
   currentSku?: string | null;
+  /** Policy-aware preview candidates, already ranked by the server. */
+  suggestedOptions?: ProductOption[];
   onPick: (option: ProductOption) => void;
   maxRows?: number;
+  /** Keep review sheets compact while retaining access to the full shortlist. */
+  initialRows?: number;
   /** vind álles: "croissant" typen bij "roomboter" haalt de croissants op */
   searchable?: boolean;
+  /** Fetch the broad /v1/match fallback immediately. A typed search always
+   *  fetches, so preview-ranked suggestions can render without initial I/O. */
+  fetchFallback?: boolean;
 }) {
   const [search, setSearch] = useState('');
   const [debounced, setDebounced] = useState('');
+  const [expanded, setExpanded] = useState(false);
   useEffect(() => {
     const t = setTimeout(() => setDebounced(search.trim()), 300);
     return () => clearTimeout(t);
   }, [search]);
-  const options = useProductOptions(debounced || term, chain);
+  useEffect(() => setExpanded(false), [term, chain, debounced]);
+  const shouldFetchFallback = fetchFallback || !!debounced;
+  const fetchedOptions = useProductOptions(debounced || term, chain, shouldFetchFallback);
+  const options = useMemo(() => {
+    // A typed search replaces the policy suggestions; without a search, keep
+    // the server-ranked, anchor-aware candidates first and append /v1/match as
+    // a broad fallback. Dedupe by SKU so the same product never appears twice.
+    const source = debounced
+      ? (fetchedOptions ?? [])
+      : [...suggestedOptions, ...(fetchedOptions ?? [])];
+    const seen = new Set<string>();
+    return source.filter((option) => {
+      if (seen.has(option.sku_id)) return false;
+      seen.add(option.sku_id);
+      return true;
+    });
+  }, [debounced, fetchedOptions, suggestedOptions]);
+  const availableRows = Math.min(options.length, maxRows);
+  const visibleRows = expanded ? availableRows : Math.min(availableRows, initialRows);
 
   const searchBox = searchable ? (
     <View style={styles.searchRow}>
-      <Search size={14} color="#97A08F" strokeWidth={2.2} />
+      <Search size={14} color={colors.textMuted2} strokeWidth={2.2} />
       <TextInput
         style={styles.searchInput}
-        placeholder={`Zoek alles bij ${chain.toUpperCase()}: bijv. ${term ?? ''} croissant…`}
-        placeholderTextColor="#97A08F"
+        placeholder={`Zoek bij ${chain.toUpperCase()}: ${term ?? 'product'} of 500 g…`}
+        placeholderTextColor={colors.textMuted2}
         value={search}
         onChangeText={setSearch}
         autoCapitalize="none"
@@ -311,7 +583,7 @@ export function ProductOptions({
     </View>
   ) : null;
 
-  if (options === null) {
+  if (shouldFetchFallback && fetchedOptions === null && options.length === 0) {
     return (
       <View>
         {searchBox}
@@ -330,10 +602,17 @@ export function ProductOptions({
   return (
     <View>
       {searchBox}
-      {options.slice(0, maxRows).map((o) => {
+      {options.slice(0, visibleRows).map((o) => {
         const chosen = o.sku_id === currentSku;
         return (
-          <Pressable key={o.sku_id} style={[styles.row, chosen && styles.rowChosen]} onPress={() => onPick(o)}>
+          <Pressable
+            key={o.sku_id}
+            style={[styles.row, chosen && styles.rowChosen]}
+            onPress={() => onPick(o)}
+            accessibilityRole="button"
+            accessibilityState={{ selected: chosen }}
+            accessibilityLabel={`Kies ${o.name}`}
+          >
             {o.image_url ? (
               <Image source={{ uri: o.image_url }} style={styles.thumb} contentFit="contain" />
             ) : (
@@ -360,33 +639,57 @@ export function ProductOptions({
           </Pressable>
         );
       })}
+      {availableRows > initialRows ? (
+        <Pressable
+          onPress={() => setExpanded((current) => !current)}
+          style={styles.moreButton}
+          accessibilityRole="button"
+          accessibilityState={{ expanded }}
+          accessibilityLabel={expanded ? 'Minder alternatieven tonen' : `Alle ${availableRows} alternatieven tonen`}
+        >
+          <Text style={styles.moreButtonText}>
+            {expanded ? 'Minder tonen' : `Toon ${availableRows - initialRows} meer`}
+          </Text>
+          {expanded
+            ? <ChevronUp size={15} color={colors.primary} strokeWidth={2.4} />
+            : <ChevronDown size={15} color={colors.primary} strokeWidth={2.4} />}
+        </Pressable>
+      ) : null}
+      {shouldFetchFallback && fetchedOptions === null
+        ? <Text style={styles.loadingMore}>Meer producten laden…</Text>
+        : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   state: { paddingVertical: 10 },
-  searchRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: colors.bg,
-    borderRadius: 11, paddingHorizontal: 11, paddingVertical: 8, marginBottom: 6,
-    borderWidth: 1, borderColor: 'rgba(34,48,30,.1)',
+  bonusFlag: {
+    alignSelf: 'flex-start', backgroundColor: colors.bonusFlag, borderRadius: radius.pill,
+    paddingHorizontal: 8, paddingVertical: 2, marginBottom: 1,
   },
-  searchInput: { flex: 1, fontSize: 12.5, color: colors.text, padding: 0 },
+  bonusFlagText: { fontSize: 10, fontFamily: fonts.bodyBold, color: colors.onBonusFlag },
+  searchRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.control, paddingHorizontal: 12, paddingVertical: 9, marginBottom: 6,
+    borderWidth: 1, borderColor: colors.borderControl,
+  },
+  searchInput: { flex: 1, fontSize: 13.5, color: colors.text, padding: 0 },
   row: {
     flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, paddingHorizontal: 6,
-    borderRadius: 12,
+    borderRadius: radius.md,
   },
   rowChosen: { backgroundColor: colors.badgeBg },
-  thumb: { width: 40, height: 40, borderRadius: 8, backgroundColor: '#FFFFFF' },
+  thumb: { width: 40, height: 40, borderRadius: 8, backgroundColor: colors.surface },
   thumbEmpty: { backgroundColor: '#EDE7D8' },
   name: { fontSize: 12.5, color: colors.text, lineHeight: 16 },
-  brand: { fontSize: 10.5, color: '#97A08F' },
-  chainBadge: { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
-  chainBadgeText: { fontSize: 8, fontFamily: fonts.bodyBold },
-  bandDivider: {
-    fontSize: 9.5, fontFamily: fonts.bodyBold, letterSpacing: 0.7, color: '#97A08F',
-    marginTop: 8, marginBottom: 3, paddingHorizontal: 6,
-  },
+  brand: { fontSize: 10.5, color: colors.textMuted2 },
   price: { fontSize: 13, fontFamily: fonts.bodySemiBold, color: colors.text },
-  oldPrice: { fontSize: 10.5, color: '#B9C0B2', textDecorationLine: 'line-through' },
+  oldPrice: { fontSize: 10.5, color: colors.textDisabled, textDecorationLine: 'line-through' },
+  moreButton: {
+    minHeight: 40, marginTop: 4, borderRadius: radius.control, flexDirection: 'row',
+    alignItems: 'center', justifyContent: 'center', gap: 5, backgroundColor: colors.badgeBg,
+  },
+  moreButtonText: { fontSize: 12, fontFamily: fonts.bodyBold, color: colors.primary },
+  loadingMore: { paddingVertical: 5, textAlign: 'center', fontSize: 10.5, color: colors.textMuted2 },
 });

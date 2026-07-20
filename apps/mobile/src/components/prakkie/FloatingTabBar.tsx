@@ -1,13 +1,15 @@
 import { Tabs, useRouter } from 'expo-router';
 import type { ComponentProps } from 'react';
+import { LinearGradient } from 'expo-linear-gradient';
 import { BookOpen, Calendar, Plus, ShoppingCart, UserRound } from 'lucide-react-native';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { colors, icons, radius, shadows, type } from '../../theme/tokens';
+import { colors, fonts, gradients, icons, radius, shadows } from '../../theme/tokens';
+import { TourTarget } from './OnboardingTour';
 
 /**
- * The floating pill tab bar + centre FAB — docs/04 §2, owner rework 2026-07-06:
- * Recepten · Plannen · [+] · Boodschappen · Profiel. The FAB opens the import sheet.
+ * Statische tabbar. Iedere bestemming houdt exact dezelfde afmetingen tijdens
+ * navigeren; alleen kleur en achtergrond geven de actieve tab aan.
  */
 
 const TAB_META: Record<string, { label: string; Icon: typeof BookOpen }> = {
@@ -24,6 +26,41 @@ const RIGHT_TABS = ['boodschappen', 'profiel'];
  *  react-navigation types are not interchangeable with the standalone package. */
 type TabBarProps = Parameters<NonNullable<ComponentProps<typeof Tabs>['tabBar']>>[0];
 
+function StaticTab({
+  label,
+  Icon,
+  focused,
+  onPress,
+  targetId,
+}: {
+  label: string;
+  Icon: typeof BookOpen;
+  focused: boolean;
+  onPress: () => void;
+  targetId: string;
+}) {
+  return (
+    <TourTarget targetId={targetId} style={styles.tabTarget}>
+      <Pressable
+        accessibilityRole="tab"
+        accessibilityState={{ selected: focused }}
+        accessibilityLabel={label}
+        onPress={onPress}
+        style={[styles.tab, focused && styles.tabActive]}
+      >
+        <Icon
+          size={icons.tabSize}
+          strokeWidth={focused ? icons.strokeWidthActive : icons.strokeWidth}
+          color={focused ? colors.primary : colors.textInactive}
+        />
+        <Text numberOfLines={1} style={[styles.label, !focused && styles.labelInactive]}>
+          {label}
+        </Text>
+      </Pressable>
+    </TourTarget>
+  );
+}
+
 export function FloatingTabBar({ state, navigation }: TabBarProps) {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -35,47 +72,43 @@ export function FloatingTabBar({ state, navigation }: TabBarProps) {
     const route = state.routes[routeIndex];
     if (!route) return null;
     const focused = state.index === routeIndex;
-    const color = focused ? colors.primary : colors.textInactive;
-    const { Icon } = meta;
     return (
-      <Pressable
+      <StaticTab
         key={routeName}
-        accessibilityRole="tab"
-        accessibilityState={{ selected: focused }}
-        accessibilityLabel={meta.label}
+        label={meta.label}
+        Icon={meta.Icon}
+        focused={focused}
+        targetId={`tab-${routeName}`}
         onPress={() => {
           const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
           if (!focused && !event.defaultPrevented) navigation.navigate(route.name);
         }}
-        style={styles.tab}
-      >
-        <Icon size={icons.tabSize} strokeWidth={icons.strokeWidth} color={color} />
-        <Text
-          numberOfLines={1}
-          style={[
-            focused ? type.tabLabelActive : type.tabLabelInactive,
-            styles.tabLabel,
-            meta.label.length > 9 && styles.tabLabelLong, // "Boodschappen" past dan net
-          ]}
-        >
-          {meta.label}
-        </Text>
-      </Pressable>
+      />
     );
   };
 
   return (
-    <View pointerEvents="box-none" style={[styles.wrap, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+    <View style={[styles.wrap, { paddingBottom: insets.bottom }]}>
       <View style={styles.bar}>
         {LEFT_TABS.map(renderTab)}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Recept importeren"
-          onPress={() => router.push('/import')}
-          style={styles.fab}
-        >
-          <Plus size={26} strokeWidth={2.4} color={colors.onPrimary} />
-        </Pressable>
+        <TourTarget targetId="tab-import" style={styles.fabTarget}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Recept importeren"
+            onPress={() => router.push('/import')}
+            style={({ pressed }) => [styles.fabWrap, pressed && { transform: [{ scale: 0.94 }] }]}
+          >
+            <LinearGradient
+              colors={gradients.primary}
+              start={{ x: 0.15, y: 0 }}
+              end={{ x: 0.6, y: 1 }}
+              style={styles.fab}
+            >
+              <View style={styles.fabHighlight} pointerEvents="none" />
+              <Plus size={24} strokeWidth={2.4} color={colors.onPrimary} />
+            </LinearGradient>
+          </Pressable>
+        </TourTarget>
         {RIGHT_TABS.map(renderTab)}
       </View>
     </View>
@@ -89,41 +122,59 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.borderSubtle,
   },
   bar: {
+    width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.94)',
-    borderRadius: radius.tabBar,
-    borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-    gap: 6,
-    ...shadows.float,
+    justifyContent: 'space-around',
+    backgroundColor: colors.surface,
+    paddingHorizontal: 5,
+    paddingTop: 7,
+    paddingBottom: 6,
   },
+  tabTarget: { flex: 1, minWidth: 0 },
+  fabTarget: { width: 62, flexShrink: 0, alignItems: 'center' },
   tab: {
+    width: '100%',
+    minWidth: 0,
     alignItems: 'center',
     justifyContent: 'center',
-    width: 64,
-    gap: 3,
+    gap: 2,
+    height: 48,
+    borderRadius: radius.md,
   },
-  tabLabel: {
-    textAlign: 'center',
+  tabActive: { backgroundColor: colors.badgeBg },
+  label: {
+    fontFamily: fonts.bodySemiBold,
+    fontSize: 9.5,
+    color: colors.primary,
   },
-  tabLabelLong: {
-    fontSize: 8.5,
-    letterSpacing: -0.2,
+  labelInactive: { color: colors.textInactive },
+  fabWrap: {
+    marginTop: -23,
+    marginHorizontal: 4,
+    borderRadius: 27,
+    ...shadows.fab,
   },
   fab: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: colors.primary,
+    width: 54,
+    height: 54,
+    borderRadius: 27,
     alignItems: 'center',
     justifyContent: 'center',
-    marginHorizontal: 4,
-    marginTop: -26,
-    ...shadows.fab,
+    overflow: 'hidden',
+  },
+  fabHighlight: {
+    position: 'absolute',
+    top: 0,
+    left: 8,
+    right: 8,
+    height: 1.5,
+    borderRadius: 1,
+    backgroundColor: 'rgba(255,255,255,0.3)',
   },
 });

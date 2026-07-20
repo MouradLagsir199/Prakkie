@@ -163,10 +163,12 @@ This is the engine that turns a free-text ingredient into a real, buyable, price
 **E2. Product catalog ingestion.** Pull structured product data per chain (name, unit price, pack size, category, Bonus/aanbieding price, availability). Strategy, per-chain endpoints, refresh cadence and legal posture are specified in **`02_supermarket_data_sources.md`** — summary: we ingest all eleven chains ourselves from their reverse-engineered mobile/web APIs, capturing the full field set (pack size, category tree, Bonus metadata, images, EANs). AH and Jumbo expose the richest data and anchor the aisle taxonomy and Bonus features.
 
 **E3. Matching (entity resolution).** Map normalised ingredient → best product SKU per selected chain. Hybrid approach:
+- Exacte EAN/GTIN-identiteit gaat vóór semantische substitutie wanneer twee ketens hetzelfde handelsartikel voeren.
 - Lexical + fuzzy match on product names.
 - Embedding similarity for semantic matches ("passata" ≈ "gezeefde tomaten").
 - Pack-size reconciliation (recipe needs 200 g; product sold in 400 g tin → compute fractional cost + flag leftover). Mockup 06 shows the payoff: "Kipdijfilet · 600 g — 2 × 300 g · restje van 0 g — pakt precies".
-- Confidence score; low-confidence matches let the user pick from a shortlist.
+- Retrieval en automatische acceptatie zijn gescheiden. Scores worden per matcher-versie/bron gecalibreerd; onzekere matches onthouden zich en laten de user kiezen uit een shortlist.
+- “Alles bij X” heeft **Nauwkeurig** (standaard), **Praktisch** en **Voordelig**. Harde product-/dieetgrenzen versoepelen nooit; prijs rangschikt alleen al-geldige equivalenten.
 
 **E4. Substitution & dietary awareness.** Respect diet flags (suggest plantaardige alternatives etc.). Offer cheaper same-category swaps — mockup 06: "huismerk-tip: € 0,80 goedkoper dan A-merk".
 
@@ -303,7 +305,8 @@ Users who don't yet have a saved library need a reason to open the app; discover
 ## 18. Non-functional requirements
 
 - **Import reliability target:** ≥95% field accuracy on blog/caption; ≥85% on video with confidence flagging. Reliability is the product — treat regressions as P0.
-- **Matching accuracy target:** ≥90% top-1 correct product match on common ingredients; always offer a shortlist fallback.
+- **Retrieval target:** ≥90% top-1 correct product match on common ingredients; always offer a shortlist fallback.
+- **Bulk-accept target:** meet precision en coverage afzonderlijk. `Nauwkeurig` gebruikt een gecalibreerde ≥99% precision-doelstelling; niet-geaccepteerde regels tellen niet mee in totalen en gaan naar controle.
 - **Latency:** import result < ~15 s for video (mockup 04 celebrates "12 s"), < 3 s for blog/caption; list price computation < 2 s.
 - **Privacy / GDPR:** EU data residency (Azure West Europe); explicit consent; one-tap export and delete. No selling data.
 - **Resilience:** product-data outage must degrade gracefully (recipe features keep working; prices show "laatst bijgewerkt" timestamps).

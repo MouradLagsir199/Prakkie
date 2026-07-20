@@ -13,7 +13,7 @@ export function SearchBar({
 }) {
   return (
     <View style={styles.wrap}>
-      <Search size={18} strokeWidth={1.9} color={colors.textMuted2} />
+      <Search size={16} strokeWidth={2.1} color={colors.textMuted2} />
       <TextInput
         style={styles.input}
         placeholder={placeholder}
@@ -28,21 +28,20 @@ export function SearchBar({
 }
 
 const styles = StyleSheet.create({
+  // owner-mockup 2026-07-14: lichtgrijs gevulde zoekbalk op de witte pagina
   wrap: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    backgroundColor: colors.surface,
-    borderRadius: radius.control,
-    borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    paddingHorizontal: 12,
-    height: 46,
+    gap: 10,
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.lg,
+    paddingHorizontal: 15,
+    height: 48,
   },
   input: {
     flex: 1,
     fontFamily: 'InstrumentSans_400Regular',
-    fontSize: 14,
+    fontSize: 13.5,
     color: colors.text,
     paddingVertical: 0,
   },

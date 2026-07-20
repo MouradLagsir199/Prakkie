@@ -168,6 +168,24 @@ if (-not $SkipApps) {
     }
 }
 
+# --- 3b. ean-enrichment container job (OFF → EAN's, zie services/ean-enrichment) ---
+$enrichDir = Join-Path $repoRoot 'services/ean-enrichment'
+if ((-not $SkipApps) -and (Test-Path $enrichDir)) {
+    Write-Host "`n--- ean-enrichment job ---"
+    az extension add --name containerapp --upgrade --only-show-errors 2>$null
+    $acrName = "crprakkie$Env"
+    $tag = (git -C $repoRoot rev-parse --short HEAD 2>$null)
+    if (-not $tag) { $tag = 'latest' }
+    $image = "prakkie/ean-enrichment:$tag"
+    az acr build --registry $acrName --image $image $enrichDir --output none
+    if ($LASTEXITCODE -ne 0) { throw 'acr build failed for ean-enrichment' }
+    # infra zet een placeholder-image neer; hier wisselen we naar het echte image
+    az containerapp job update -g "prakkie-$Env" -n "caj-ean-enrich-$Env" `
+        --image "$acrName.azurecr.io/$image" --output none
+    if ($LASTEXITCODE -ne 0) { throw 'containerapp job update failed for caj-ean-enrich' }
+    Write-Host "ean-enrichment: $acrName.azurecr.io/$image -> caj-ean-enrich-$Env (schema: ma 03:00 UTC; nu draaien: az containerapp job start -g prakkie-$Env -n caj-ean-enrich-$Env)"
+}
+
 # --- 4. web (Static Web Apps) ---
 if ((-not $SkipApps) -and (Test-Path (Join-Path $repoRoot 'apps/web/index.html'))) {
     Write-Host "`n--- web (Static Web Apps) ---"

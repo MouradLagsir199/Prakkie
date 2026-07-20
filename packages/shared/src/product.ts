@@ -41,6 +41,26 @@ export const Product = z.object({
 });
 export type Product = z.infer<typeof Product>;
 
+/** Persisted return point for a temporary bulk supermarket substitution. The
+ * client stores this inside the selected match so “Herstel eigen keuzes” also
+ * works after saving, restarting, or syncing to another device. */
+export const ProductMatchRestore = z.object({
+  chain_id: ChainId.nullable(),
+  product_name: z.string(),
+  item_normalised: z.string().nullable().optional(),
+  match: z.object({
+    sku_id: z.string(),
+    confidence: z.number().min(0).max(1).optional(),
+    user_pinned: z.boolean().optional(),
+    preferred: z.boolean().optional(),
+    origin: z.enum(['automatic', 'bulk_accepted', 'user_confirmed']).optional(),
+    policy: z.enum(['precise', 'practical', 'value']).optional(),
+    matcher_version: z.string().optional(),
+  }).nullable().optional(),
+  unit_cents: z.number().int().nonnegative().nullable().optional(),
+});
+export type ProductMatchRestore = z.infer<typeof ProductMatchRestore>;
+
 /** A product matched to an ingredient line, with confidence + pack-fit info (spec §E3/E6). */
 export const ProductMatch = z.object({
   chain: ChainId,
@@ -48,6 +68,13 @@ export const ProductMatch = z.object({
   confidence: z.number().min(0).max(1),
   /** Pinned by the user via the shortlist — wins over any automatic match (spec §E5). */
   user_pinned: z.boolean().default(false),
+  /** How this selection became authoritative. Bulk acceptance is intentionally
+   * distinct from an individually confirmed correction. */
+  origin: z.enum(['automatic', 'bulk_accepted', 'user_confirmed']).default('automatic'),
+  policy: z.enum(['precise', 'practical', 'value']).nullable().default(null),
+  matcher_version: z.string().nullable().default(null),
+  preferred: z.boolean().default(false),
+  restore: ProductMatchRestore.optional(),
   packs_to_buy: z.number().int().positive().default(1),
   /** Leftover after the recipe need is covered, in the product's pack unit. 0 ⇒ "pakt precies". */
   leftover_value: z.number().nonnegative().nullable().default(null),

@@ -23,6 +23,50 @@ export interface PackFitResult {
   fitsExactly: boolean;
 }
 
+export interface ParsedPackSize {
+  /** Total contents of one purchasable package, in a base unit. */
+  value: number;
+  unit: 'g' | 'ml' | 'st';
+}
+
+/**
+ * Read a pack size from a product title. Multipacks are returned as
+ * their total purchasable contents: `2 x 180 g` is one 360 g package, not a
+ * 180 g package and not two packages in the basket.
+ */
+export function parsePackSizeText(text: string | null | undefined): ParsedPackSize | null {
+  if (!text) return null;
+  const matches = [...text.matchAll(
+    /\b(?:(\d+)\s*[x×]\s*)?(\d+(?:[.,]\d+)?)\s*(kg|kilo(?:gram)?|g|gr|gram|ml|cl|dl|l|liter|litre|stuks?|st)\b/gi
+  )];
+  const match = matches.at(-1);
+  if (!match) return null;
+
+  const multiplier = match[1] ? Number(match[1]) : 1;
+  const amount = Number(match[2]!.replace(',', '.'));
+  const rawUnit = match[3]!.toLowerCase();
+  const units: Record<string, ParsedPackSize> = {
+    kg: { value: 1000, unit: 'g' },
+    kilo: { value: 1000, unit: 'g' },
+    kilogram: { value: 1000, unit: 'g' },
+    g: { value: 1, unit: 'g' },
+    gr: { value: 1, unit: 'g' },
+    gram: { value: 1, unit: 'g' },
+    ml: { value: 1, unit: 'ml' },
+    cl: { value: 10, unit: 'ml' },
+    dl: { value: 100, unit: 'ml' },
+    l: { value: 1000, unit: 'ml' },
+    liter: { value: 1000, unit: 'ml' },
+    litre: { value: 1000, unit: 'ml' },
+    st: { value: 1, unit: 'st' },
+    stuk: { value: 1, unit: 'st' },
+    stuks: { value: 1, unit: 'st' },
+  };
+  const unit = units[rawUnit];
+  if (!unit || multiplier <= 0 || amount <= 0) return null;
+  return { value: multiplier * amount * unit.value, unit: unit.unit };
+}
+
 export function reconcilePackSize(input: PackFitInput): PackFitResult {
   const { neededValue, packValue, packPriceCents } = input;
   if (neededValue <= 0 || packValue <= 0 || packPriceCents < 0) {

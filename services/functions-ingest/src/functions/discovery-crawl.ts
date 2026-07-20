@@ -34,7 +34,7 @@ app.timer('discovery-crawl-weekly', {
     );
     for (const { domain } of sources.rows) {
       try {
-        const stats = await crawlSource(domain, 150);
+        const stats = await crawlSource(domain, 300);
         ctx.log(`weekly crawl ${domain}: saved ${stats.saved}/${stats.discovered}`);
       } catch (err) {
         ctx.error(`weekly crawl ${domain} failed: ${err instanceof Error ? err.message : err}`);

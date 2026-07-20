@@ -11,6 +11,10 @@ param pgHost string
 var appName = 'func-prakkie-${role}-${env}'
 // KV secret names per plan/06_iac.md §3 #3: PG-APP-PASSWORD (api app) / PG-INGEST-PASSWORD
 var pgSecretName = role == 'api' ? 'PG-APP-PASSWORD' : 'PG-INGEST-PASSWORD'
+var apiAuthSettings = role == 'api' ? [
+  // Native Sign in with Apple identity tokens use the iOS bundle ID as audience.
+  { name: 'APPLE_CLIENT_IDS', value: 'nl.prakkie.app' }
+] : []
 
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
   name: storageAccountName
@@ -43,7 +47,7 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
       linuxFxVersion: 'NODE|20'
       minTlsVersion: '1.2'
       ftpsState: 'Disabled'
-      appSettings: [
+      appSettings: concat([
         { name: 'AzureWebJobsStorage', value: storageConnectionString }
         { name: 'FUNCTIONS_EXTENSION_VERSION', value: '~4' }
         { name: 'FUNCTIONS_WORKER_RUNTIME', value: 'node' }
@@ -61,7 +65,7 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         // import pipeline (WS3) — server-side only, never reachable from the client
         { name: 'APIFY_API_TOKEN', value: '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=APIFY-API-TOKEN)' }
         { name: 'OPENAI_API_KEY', value: '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=OPENAI-API-KEY)' }
-      ]
+      ], apiAuthSettings)
     }
   }
 }

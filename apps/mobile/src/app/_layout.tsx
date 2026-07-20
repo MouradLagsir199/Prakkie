@@ -36,14 +36,15 @@ export default function RootLayout() {
     return () => sub.remove();
   }, []);
 
-  // first launch → onboarding (A3)
+  // eerste start of na uitloggen → inlogscherm (owner 2026-07-07); wie is
+  // ingelogd blijft ingelogd, ook na het sluiten van de app (SecureStore)
   useEffect(() => {
-    if (Platform.OS === 'web') return; // web companion is a viewer, no onboarding
-    kv.getItem('prakkie.onboarded')
-      .then((v) => {
-        if (!v) router.replace('/onboarding');
-      })
-      .catch(() => {});
+    if (Platform.OS === 'web') return; // web companion is a viewer, no login wall
+    (async () => {
+      const authed = await kv.getItem('prakkie.authed').catch(() => null);
+      const legacy = await kv.getItem('prakkie.onboarded').catch(() => null); // bestaande installs niet eruit gooien
+      if (!authed && !legacy) router.replace('/login');
+    })();
   }, []);
 
   if (!fontsLoaded) return null;

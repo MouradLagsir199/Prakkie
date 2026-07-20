@@ -116,12 +116,40 @@ export async function login(email: string, password: string): Promise<SessionUse
   return storeSession((await res.json()) as SessionBundle);
 }
 
+export async function loginWithGoogle(idToken: string, displayName?: string): Promise<SessionUser> {
+  const res = await authedRequest('/v1/auth/google', {
+    method: 'POST',
+    body: JSON.stringify({ id_token: idToken, display_name: displayName, platform }),
+  });
+  if (!res.ok) throw await readError(res);
+  return storeSession((await res.json()) as SessionBundle);
+}
+
+export async function loginWithApple(idToken: string, displayName?: string): Promise<SessionUser> {
+  const res = await authedRequest('/v1/auth/apple', {
+    method: 'POST',
+    body: JSON.stringify({ id_token: idToken, display_name: displayName, platform }),
+  });
+  if (!res.ok) throw await readError(res);
+  return storeSession((await res.json()) as SessionBundle);
+}
+
 export async function logout(): Promise<void> {
   try {
     await authedRequest('/v1/auth/logout', { method: 'POST', body: '{}' });
   } catch {
     // best effort — local wipe is what matters
   }
+  await SecureStore.deleteItemAsync(KEYS.access);
+  await SecureStore.deleteItemAsync(KEYS.refresh);
+  await SecureStore.deleteItemAsync(KEYS.user);
+}
+
+/** Permanently disable the remote account, then remove every local credential.
+ * The server revokes all devices in the same transaction. */
+export async function deleteAccount(): Promise<void> {
+  const res = await authedRequest('/v1/me', { method: 'DELETE' });
+  if (!res.ok) throw await readError(res);
   await SecureStore.deleteItemAsync(KEYS.access);
   await SecureStore.deleteItemAsync(KEYS.refresh);
   await SecureStore.deleteItemAsync(KEYS.user);

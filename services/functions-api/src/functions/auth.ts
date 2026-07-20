@@ -1,5 +1,6 @@
 import { app, HttpRequest } from '@azure/functions';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { hashPassword, hashRefreshToken, parseRefreshToken, verifyPassword } from '../lib/auth';
 import { query, withTransaction } from '../lib/db';
@@ -173,19 +174,7 @@ async function providerSignIn(req: HttpRequest, provider: 'apple' | 'google') {
     req,
     z.object({ id_token: z.string(), platform: Platform, display_name: z.string().max(100).optional() })
   );
-
-  let sub: string;
-  let email: string | null;
-  try {
-    const { payload } = await jwtVerify(body.id_token, cfg.jwks, {
-      issuer: cfg.issuer as string,
-      audience: cfg.audiences,
-    });
-    sub = payload.sub as string;
-    email = typeof payload.email === 'string' ? payload.email : null;
-  } catch {
-    throw new HttpError(401, 'invalid_provider_token', `Ongeldig ${provider} id_token`);
-  }
+  const { sub, email } = await verifyProviderToken(body.id_token, provider, cfg);
 
   // a valid guest bearer upgrades that user in place — id preserved
   let guestUserId: string | null = null;
@@ -199,45 +188,82 @@ async function providerSignIn(req: HttpRequest, provider: 'apple' | 'google') {
     }
   }
 
-  const bundle = await withTransaction(async (tx) => {
+  const bundle = await withTransaction((tx) =>
+    linkProviderIdentity(tx, cfg, {
+      sub,
+      email,
+      displayName: body.display_name,
+      platform: body.platform,
+      guestUserId,
+    })
+  );
+  return json(200, bundle);
+}
+
+async function verifyProviderToken(idToken: string, provider: 'apple' | 'google', cfg = providerConfig(provider)) {
+  try {
+    const { payload } = await jwtVerify(idToken, cfg.jwks, {
+      issuer: cfg.issuer as string,
+      audience: cfg.audiences,
+    });
+    if (!payload.sub) throw new Error('missing subject');
+    return {
+      sub: payload.sub,
+      email: typeof payload.email === 'string' ? payload.email.toLowerCase() : null,
+    };
+  } catch {
+    throw new HttpError(401, 'invalid_provider_token', `Ongeldig ${provider} id_token`);
+  }
+}
+
+async function linkProviderIdentity(
+  tx: PoolClient,
+  cfg: ProviderConfig,
+  input: {
+    sub: string;
+    email: string | null;
+    displayName?: string;
+    platform: 'ios' | 'android' | 'web';
+    guestUserId: string | null;
+  }
+) {
     const bySub = await tx.query(
       `SELECT ${PUBLIC_USER_COLUMNS} FROM app.users WHERE ${cfg.column} = $1 AND deleted_at IS NULL`,
-      [sub]
+      [input.sub]
     );
     let user = bySub.rows[0] as UserRow | undefined;
-    if (!user && guestUserId) {
+    if (!user && input.email) {
+      // Existing account wins over the temporary guest. This keeps recipes and
+      // lists reachable when somebody changes phone or identity provider.
+      user = (
+        await tx.query(
+          `UPDATE app.users SET ${cfg.column} = $2 WHERE email = $1 AND deleted_at IS NULL
+           RETURNING ${PUBLIC_USER_COLUMNS}`,
+          [input.email, input.sub]
+        )
+      ).rows[0] as UserRow | undefined;
+    }
+    if (!user && input.guestUserId) {
       user = (
         await tx.query(
           `UPDATE app.users
            SET ${cfg.column} = $2, email = coalesce(email, $3), display_name = coalesce($4, display_name), is_guest = false
            WHERE id = $1 AND deleted_at IS NULL RETURNING ${PUBLIC_USER_COLUMNS}`,
-          [guestUserId, sub, email, body.display_name ?? null]
+          [input.guestUserId, input.sub, input.email, input.displayName ?? null]
         )
       ).rows[0] as UserRow;
-    }
-    if (!user && email) {
-      // same address already registered via email/password → link the provider
-      user = (
-        await tx.query(
-          `UPDATE app.users SET ${cfg.column} = $2 WHERE email = $1 AND deleted_at IS NULL
-           RETURNING ${PUBLIC_USER_COLUMNS}`,
-          [email, sub]
-        )
-      ).rows[0] as UserRow | undefined;
     }
     if (!user) {
       user = (
         await tx.query(
           `INSERT INTO app.users (${cfg.column}, email, display_name, is_guest)
            VALUES ($1, $2, $3, false) RETURNING ${PUBLIC_USER_COLUMNS}`,
-          [sub, email, body.display_name ?? null]
+          [input.sub, input.email, input.displayName ?? null]
         )
       ).rows[0] as UserRow;
     }
-    const deviceId = await createDevice(user.id, body.platform, tx);
+    const deviceId = await createDevice(user.id, input.platform, tx);
     return issueSession(user, deviceId, tx);
-  });
-  return json(200, bundle);
 }
 
 app.http('auth-apple', {

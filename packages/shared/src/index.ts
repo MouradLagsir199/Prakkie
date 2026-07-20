@@ -12,3 +12,5 @@ export * from './link-context';
 export * from './sync';
 export * from './offline-engine';
 export * from './jsonld';
+export * from './store';
+export * from './pack-query';

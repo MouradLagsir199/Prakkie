@@ -19,7 +19,7 @@ export const env = {
     return required('JWT_SIGNING_KEY');
   },
   /** Empty until owner input #4 lands — Apple/Google sign-in returns 501 without them. */
-  appleClientIds: (process.env.APPLE_CLIENT_IDS ?? '').split(',').filter(Boolean),
+  appleClientIds: (process.env.APPLE_CLIENT_IDS ?? '').split(',').map((value) => value.trim()).filter(Boolean),
   googleClientIds: (process.env.GOOGLE_CLIENT_IDS ?? '').split(',').filter(Boolean),
   // WS3 import pipeline — server-side only, never shipped to the client
   get apifyToken() {

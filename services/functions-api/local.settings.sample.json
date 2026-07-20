@@ -8,7 +8,7 @@
     "PG_USER": "prakkie_app",
     "PG_PASSWORD": "<from Key Vault PG-APP-PASSWORD — never commit real values>",
     "JWT_SIGNING_KEY": "<from Key Vault JWT-SIGNING-KEY>",
-    "APPLE_CLIENT_IDS": "",
+    "APPLE_CLIENT_IDS": "nl.prakkie.app",
     "GOOGLE_CLIENT_IDS": "",
     "APIFY_API_TOKEN": "<from Key Vault>",
     "OPENAI_API_KEY": "<from Key Vault>"
