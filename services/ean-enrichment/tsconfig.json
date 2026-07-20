@@ -1,0 +1,16 @@
+{
+  // JS-only service (plain .mjs). This tsconfig exists so the workspace-wide
+  // `pnpm -r exec tsc --noEmit` typecheck is a clean no-op here instead of
+  // erroring on a missing config. We deliberately do not type-check the JS.
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "target": "ESNext",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "skipLibCheck": true,
+    "types": []
+  },
+  "include": ["src/**/*.mjs"]
+}
