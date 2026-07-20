@@ -123,7 +123,7 @@ jobs:
           echo "server=$SERVER" >> "$GITHUB_OUTPUT"
           echo "rule=$RULE" >> "$GITHUB_OUTPUT"
           az postgres flexible-server firewall-rule create -g "$RG" -s "$SERVER" \
-            --rule-name "$RULE" --start-ip-address "$IP" --end-ip-address "$IP" --output none
+            --name "$RULE" --start-ip-address "$IP" --end-ip-address "$IP" --output none
 
       - name: Run migrations
         run: node scripts/db-migrate.mjs --env "$DEPLOY_ENV"
@@ -133,4 +133,4 @@ jobs:
         run: |
           az postgres flexible-server firewall-rule delete \
             -g "prakkie-${DEPLOY_ENV}" -s "${{ steps.fw.outputs.server }}" \
-            --rule-name "${{ steps.fw.outputs.rule }}" --yes --output none
+            --name "${{ steps.fw.outputs.rule }}" --yes --output none
