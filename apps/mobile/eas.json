@@ -29,6 +29,13 @@
         "EXPO_PUBLIC_API_URL": "https://func-prakkie-api-prod.azurewebsites.net/api",
         "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "670984534617-5jtjlgp8hsvluqsuhhaa51adr0lkki2t.apps.googleusercontent.com"
       }
+    },
+    "production-apk": {
+      "extends": "production",
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      }
     }
   },
   "submit": {
