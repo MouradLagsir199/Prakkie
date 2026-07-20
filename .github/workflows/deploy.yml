@@ -1,0 +1,136 @@
+name: Deploy
+
+# Deploys the two Function apps + runs SQL migrations, mirroring
+# `scripts/deploy.ps1 -SkipInfra`. Auth is OIDC — no long-lived secrets are
+# stored in GitHub. The apps read OpenAI/Apify/Postgres/JWT from Key Vault via
+# their app settings, and db-migrate pulls PG passwords from Key Vault at
+# runtime, so nothing secret ever passes through this workflow.
+#
+# Required repo secrets (Azure IDs — not sensitive, just identifiers):
+#   AZURE_CLIENT_ID        federated app registration / managed identity client id
+#   AZURE_TENANT_ID        Entra tenant id
+#   AZURE_SUBSCRIPTION_ID  target subscription id
+# Infra (Bicep) stays manual via scripts/deploy.ps1 — this workflow never
+# touches infrastructure.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [dev, prod]
+        default: dev
+
+# push → dev; manual dispatch → chosen env
+env:
+  DEPLOY_ENV: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+
+permissions:
+  id-token: write   # OIDC token for azure/login
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+  cancel-in-progress: false
+
+jobs:
+  functions:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [api, ingest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Bundle ${{ matrix.app }}
+        run: |
+          APP_DIR="services/functions-${{ matrix.app }}"
+          node scripts/bundle-functions.mjs "$APP_DIR"
+          cp "$APP_DIR/host.json" "$APP_DIR/.publish/host.json"
+          # run-from-package manifest, identical to scripts/deploy.ps1
+          printf '{"name":"functions-%s","version":"0.0.0","main":"dist/src/functions/*.js"}\n' \
+            "${{ matrix.app }}" > "$APP_DIR/.publish/package.json"
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Publish ${{ matrix.app }}
+        uses: Azure/functions-action@v1
+        with:
+          app-name: func-prakkie-${{ matrix.app }}-${{ env.DEPLOY_ENV }}
+          package: services/functions-${{ matrix.app }}/.publish
+
+      - name: Healthz smoke test
+        run: |
+          URL="https://func-prakkie-${{ matrix.app }}-${{ env.DEPLOY_ENV }}.azurewebsites.net/api/healthz"
+          for i in $(seq 1 10); do
+            status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$URL" || echo ERR)
+            echo "$URL -> $status (try $i)"
+            [ "$status" = "200" ] && exit 0
+            sleep 15
+          done
+          echo "healthz never returned 200"; exit 1
+
+  migrate:
+    needs: functions
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # The GitHub runner's egress IP is dynamic, so open a scoped, temporary
+      # PG firewall rule for this run and always remove it afterwards.
+      - name: Open temporary PG firewall
+        id: fw
+        run: |
+          RG="prakkie-${DEPLOY_ENV}"
+          SERVER=$(az postgres flexible-server list -g "$RG" --query '[0].name' -o tsv)
+          IP=$(curl -s https://api.ipify.org)
+          RULE="gh-actions-${GITHUB_RUN_ID}"
+          echo "server=$SERVER" >> "$GITHUB_OUTPUT"
+          echo "rule=$RULE" >> "$GITHUB_OUTPUT"
+          az postgres flexible-server firewall-rule create -g "$RG" -s "$SERVER" \
+            --rule-name "$RULE" --start-ip-address "$IP" --end-ip-address "$IP" --output none
+
+      - name: Run migrations
+        run: node scripts/db-migrate.mjs --env "$DEPLOY_ENV"
+
+      - name: Remove temporary PG firewall
+        if: always() && steps.fw.outputs.server != ''
+        run: |
+          az postgres flexible-server firewall-rule delete \
+            -g "prakkie-${DEPLOY_ENV}" -s "${{ steps.fw.outputs.server }}" \
+            --rule-name "${{ steps.fw.outputs.rule }}" --yes --output none
