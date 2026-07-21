@@ -1,0 +1,104 @@
+[
+  {
+    "id": "ah-cola-zero-15l",
+    "raw": { "name": "AH Cola zero 1,5 L", "brand": "AH", "pack_size_value": 1.5, "pack_size_unit": "l", "category_path": ["Frisdrank", "Cola"], "intent_form": "houdbaar", "is_organic": false },
+    "expected": { "category": "frisdrank", "brand_tier": "private_label", "variant": "zero", "flavor": "regular", "form": "houdbaar", "dietary": [], "type": null },
+    "expect_verified": true
+  },
+  {
+    "id": "cocacola-zero-15l",
+    "raw": { "name": "Coca-Cola Zero Sugar 1,5 L", "brand": "Coca-Cola", "pack_size_value": 1.5, "pack_size_unit": "l", "category_path": ["Frisdrank", "Cola"], "intent_form": "houdbaar", "is_organic": false },
+    "expected": { "category": "frisdrank", "brand_tier": "a_merk", "variant": "zero", "flavor": "regular", "form": "houdbaar", "dietary": [], "type": null },
+    "expect_verified": true
+  },
+  {
+    "id": "cocacola-regular-15l",
+    "raw": { "name": "Coca-Cola Original Taste 1,5 L", "brand": "Coca-Cola", "pack_size_value": 1.5, "pack_size_unit": "l", "category_path": ["Frisdrank", "Cola"], "intent_form": "houdbaar", "is_organic": false },
+    "expected": { "category": "frisdrank", "brand_tier": "a_merk", "variant": "regular", "flavor": "regular", "form": "houdbaar", "dietary": [], "type": null },
+    "expect_verified": true
+  },
+  {
+    "id": "ah-cola-cherry-zero",
+    "raw": { "name": "AH Cola cherry zero 1,5 L", "brand": "AH", "pack_size_value": 1.5, "pack_size_unit": "l", "category_path": ["Frisdrank", "Cola"], "intent_form": "houdbaar", "is_organic": false },
+    "expected": { "category": "frisdrank", "brand_tier": "private_label", "variant": "zero", "flavor": "cherry", "form": "houdbaar", "dietary": [], "type": null },
+    "expect_verified": true
+  },
+  {
+    "id": "plus-cola-zero-1l",
+    "raw": { "name": "PLUS Cola zero 1 L", "brand": "PLUS", "pack_size_value": 1, "pack_size_unit": "l", "category_path": ["Frisdrank", "Cola & Fris"], "intent_form": "houdbaar", "is_organic": false },
+    "expected": { "category": "frisdrank", "brand_tier": "private_label", "variant": "zero", "flavor": "regular", "form": "houdbaar", "dietary": [], "type": null },
+    "expect_verified": true
+  },
+  {
+    "id": "ah-halfvolle-melk-1l",
+    "raw": { "name": "AH Halfvolle melk 1 L", "brand": "AH", "pack_size_value": 1, "pack_size_unit": "l", "category_path": ["Zuivel", "Melk"], "intent_form": "vers", "is_organic": false },
+    "expected": { "category": "zuivel-melk", "brand_tier": "private_label", "variant": "regular", "flavor": "regular", "form": "vers", "dietary": [], "type": "halfvol" },
+    "expect_verified": true
+  },
+  {
+    "id": "ah-volle-melk-1l",
+    "raw": { "name": "AH Volle melk 1 L", "brand": "AH", "pack_size_value": 1, "pack_size_unit": "l", "category_path": ["Zuivel", "Melk"], "intent_form": "vers", "is_organic": false },
+    "expected": { "category": "zuivel-melk", "brand_tier": "private_label", "variant": "regular", "flavor": "regular", "form": "vers", "dietary": [], "type": "vol" },
+    "expect_verified": true
+  },
+  {
+    "id": "arla-lactosevrij-halfvol-1l",
+    "raw": { "name": "Arla Lactofree halfvolle melk 1 L", "brand": "Arla", "pack_size_value": 1, "pack_size_unit": "l", "category_path": ["Zuivel", "Melk", "Lactosevrij"], "intent_form": "vers", "is_organic": false },
+    "expected": { "category": "zuivel-melk", "brand_tier": "a_merk", "variant": "regular", "flavor": "regular", "form": "vers", "dietary": ["lactosevrij"], "type": "halfvol" },
+    "expect_verified": true
+  },
+  {
+    "id": "ah-bio-halfvolle-melk-1l",
+    "raw": { "name": "AH Biologisch Halfvolle melk 1 L", "brand": "AH Biologisch", "pack_size_value": 1, "pack_size_unit": "l", "category_path": ["Zuivel", "Melk", "Biologisch"], "intent_form": "vers", "is_organic": true },
+    "expected": { "category": "zuivel-melk", "brand_tier": "private_label", "variant": "regular", "flavor": "regular", "form": "vers", "dietary": ["bio"], "type": "halfvol" },
+    "expect_verified": true
+  },
+  {
+    "id": "bonduelle-sperziebonen-blik-400",
+    "raw": { "name": "Bonduelle Sperziebonen fijn 400 g", "brand": "Bonduelle", "pack_size_value": 400, "pack_size_unit": "g", "category_path": ["Conserven", "Groente in blik"], "intent_form": "blik", "is_organic": false },
+    "expected": { "category": "groente", "brand_tier": "a_merk", "variant": "regular", "flavor": "regular", "form": "blik", "dietary": [], "type": "sperziebonen" },
+    "expect_verified": true
+  },
+  {
+    "id": "ah-sperziebonen-vers-400",
+    "raw": { "name": "AH Sperziebonen 400 g", "brand": "AH", "pack_size_value": 400, "pack_size_unit": "g", "category_path": ["Groente", "Verse groente"], "intent_form": "vers", "is_organic": false },
+    "expected": { "category": "groente", "brand_tier": "private_label", "variant": "regular", "flavor": "regular", "form": "vers", "dietary": [], "type": "sperziebonen" },
+    "expect_verified": true
+  },
+  {
+    "id": "iglo-sperziebonen-diepvries-450",
+    "raw": { "name": "Iglo Sperziebonen 450 g", "brand": "Iglo", "pack_size_value": 450, "pack_size_unit": "g", "category_path": ["Diepvries", "Groente"], "intent_form": "diepvries", "is_organic": false },
+    "expected": { "category": "groente", "brand_tier": "a_merk", "variant": "regular", "flavor": "regular", "form": "diepvries", "dietary": [], "type": "sperziebonen" },
+    "expect_verified": true
+  },
+  {
+    "id": "bonduelle-doperwten-blik-400",
+    "raw": { "name": "Bonduelle Doperwten extra fijn 400 g", "brand": "Bonduelle", "pack_size_value": 400, "pack_size_unit": "g", "category_path": ["Conserven", "Groente in blik"], "intent_form": "blik", "is_organic": false },
+    "expected": { "category": "groente", "brand_tier": "a_merk", "variant": "regular", "flavor": "regular", "form": "blik", "dietary": [], "type": "doperwten" },
+    "expect_verified": true
+  },
+  {
+    "id": "ah-kristalsuiker-1kg",
+    "raw": { "name": "AH Kristalsuiker 1 kg", "brand": "AH", "pack_size_value": 1, "pack_size_unit": "kg", "category_path": ["Bakken", "Suiker"], "intent_form": "houdbaar", "is_organic": false },
+    "expected": { "category": "suiker", "brand_tier": "private_label", "variant": "regular", "flavor": "regular", "form": "houdbaar", "dietary": [], "type": "kristal" },
+    "expect_verified": true
+  },
+  {
+    "id": "vangilse-basterd-wit-500",
+    "raw": { "name": "Van Gilse Witte basterdsuiker 500 g", "brand": "Van Gilse", "pack_size_value": 500, "pack_size_unit": "g", "category_path": ["Bakken", "Suiker"], "intent_form": "houdbaar", "is_organic": false },
+    "expected": { "category": "suiker", "brand_tier": "a_merk", "variant": "regular", "flavor": "regular", "form": "houdbaar", "dietary": [], "type": "basterd" },
+    "expect_verified": true
+  },
+  {
+    "id": "koopmans-witbrood-mix-450-TRAP",
+    "raw": { "name": "Koopmans Witbrood Mix 450 g", "brand": "Koopmans", "pack_size_value": 450, "pack_size_unit": "g", "category_path": ["Bakken", "Bakmixen"], "intent_form": "vers", "is_organic": false },
+    "expected": { "category": "bakproducten", "brand_tier": "a_merk", "variant": "regular", "flavor": "regular", "form": "houdbaar", "dietary": [], "type": "broodmix" },
+    "expect_verified": false
+  },
+  {
+    "id": "ah-witbrood-heel-800",
+    "raw": { "name": "AH Witbrood heel 800 g", "brand": "AH", "pack_size_value": 800, "pack_size_unit": "g", "category_path": ["Brood", "Wit brood"], "intent_form": "vers", "is_organic": false },
+    "expected": { "category": "brood", "brand_tier": "private_label", "variant": "regular", "flavor": "regular", "form": "vers", "dietary": [], "type": "wit" },
+    "expect_verified": true
+  }
+]
