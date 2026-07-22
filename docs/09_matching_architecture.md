@@ -234,8 +234,14 @@ auto-toepassen; anders degradeert de categorie automatisch naar COMPROMISE-only.
   `mergeCategoryPolicies()`; onbekende categorie → conservatieve in-code
   fallback. LLM-draft voor de longtail: `facet-policy-draft.mjs` (concept,
   source='llm', mens keurt goed vóór het telt).
-- **Fase 3 — Canonical graph** (huismerk-clustering, LLM-geadjudiceerd,
-  confidence + redenen).
+- **Fase 3 — Canonical graph. ✅ (2026-07-21).** `canonical-graph.mjs`:
+  canonicalKey = categorie + harde facetten; SKU's met dezelfde sleutel zijn
+  siblings (brand_tier zacht → huismerk + A-merk clusteren samen). Migration
+  0043 (`canonical_product`/`canonical_member`), builder `canonical-run.mjs`,
+  5 tests. **Bewezen op dev**: de knoop `frisdrank · zero` bundelt 80 cola-zero
+  SKU's over 6 ketens (huismerk G'woon/1 de Beste/Jumbo + A-merk Coca-Cola/Pepsi)
+  — de cross-chain huismerk-match die EAN-only nooit kon. Verfijnpunten voor de
+  facet-golden: cafeïnevrij als eigen as, "zero lemon" als flavor=lemon.
 - **Fase 4 — Runtime funnel-swap** in `pricing.ts`:
   EXACT/EQUIVALENT/COMPROMISE/NO_MATCH + uitlegbaarheid; auto-toepassen van
   zekere tiers.
