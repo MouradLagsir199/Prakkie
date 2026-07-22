@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classify, verifyFacets, categoryPolicy } from './facets.mjs';
+import { classify, verifyFacets, categoryPolicy, mergeCategoryPolicies } from './facets.mjs';
 
 // Facetstruct-helper.
 const f = (over) => ({
@@ -95,5 +95,26 @@ describe('categoryPolicy', () => {
   it('valt terug op conservatief beleid (categorie+vorm hard) voor onbekende', () => {
     const p = categoryPolicy('iets-onbekends');
     expect(p.hard).toEqual(['category', 'form']);
+  });
+
+  it('mergeCategoryPolicies legt DB-rijen over het in-code beleid', () => {
+    const merged = mergeCategoryPolicies([
+      { category: 'frisdrank', hard_facets: ['category', 'variant'], soft_facets: ['pack'] },
+      { category: 'sap', hard_facets: ['category', 'flavor'], soft_facets: ['pack'] },
+    ]);
+    expect(categoryPolicy('frisdrank', merged).hard).toEqual(['category', 'variant']); // overschreven
+    expect(categoryPolicy('sap', merged).hard).toContain('flavor'); // nieuw
+    expect(categoryPolicy('suiker', merged).hard).toContain('type'); // ongemoeid in-code
+  });
+
+  it('classify gebruikt het geïnjecteerde beleid', () => {
+    // Injecteer: voor frisdrank telt smaak NIET hard → cola cherry ≈ cola regular
+    const merged = mergeCategoryPolicies([
+      { category: 'frisdrank', hard_facets: ['category', 'variant'], soft_facets: ['flavor', 'pack'] },
+    ]);
+    const src = { category: 'frisdrank', variant: 'zero', flavor: 'cherry', ean: null };
+    const cand = { category: 'frisdrank', variant: 'zero', flavor: 'regular', ean: null };
+    expect(classify(src, cand).decision).toBe('COMPROMISE');           // in-code: smaak hard
+    expect(classify(src, cand, merged).decision).toBe('EQUIVALENT');   // geïnjecteerd: smaak zacht
   });
 });

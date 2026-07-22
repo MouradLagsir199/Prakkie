@@ -228,7 +228,12 @@ auto-toepassen; anders degradeert de categorie automatisch naar COMPROMISE-only.
   `facet-extract.mjs`.
 - **Fase 1 — Facet-pipeline at scale** → `product_facets`, backfill via
   `ean-enrichment`.
-- **Fase 2 — Categorie-beleidstabel** + conservatieve fallback.
+- **Fase 2 — Categorie-beleidstabel + conservatieve fallback. ✅ (2026-07-21).**
+  Migration `0042_category_facet_policy` (mens-bewerkbaar, geseed voor
+  frisdrank/zuivel-melk/groente/suiker). `facets.mjs` laadt DB-beleid via
+  `mergeCategoryPolicies()`; onbekende categorie → conservatieve in-code
+  fallback. LLM-draft voor de longtail: `facet-policy-draft.mjs` (concept,
+  source='llm', mens keurt goed vóór het telt).
 - **Fase 3 — Canonical graph** (huismerk-clustering, LLM-geadjudiceerd,
   confidence + redenen).
 - **Fase 4 — Runtime funnel-swap** in `pricing.ts`:

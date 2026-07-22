@@ -38,8 +38,25 @@ const FALLBACK_POLICY = {
   soft: ['brand_tier', 'variant', 'flavor', 'type', 'dietary', 'pack'],
 };
 
-export function categoryPolicy(category) {
-  return CATEGORY_POLICY[category] ?? FALLBACK_POLICY;
+export { CATEGORY_POLICY as BUILTIN_CATEGORY_POLICY, FALLBACK_POLICY };
+
+/**
+ * Het beleid voor een categorie. `policies` is de actieve beleidsmap; standaard
+ * het in-code beleid (offline pipeline + tests). De server-runtime laadt
+ * catalog.category_facet_policy en geeft die hier mee (mergeCategoryPolicies).
+ * Onbekende categorie → conservatieve fallback (categorie + form hard).
+ */
+export function categoryPolicy(category, policies = CATEGORY_POLICY) {
+  return policies[category] ?? FALLBACK_POLICY;
+}
+
+/** DB-rijen ({category, hard_facets, soft_facets}) over het in-code beleid. */
+export function mergeCategoryPolicies(rows = []) {
+  const map = { ...CATEGORY_POLICY };
+  for (const r of rows) {
+    if (r?.category) map[r.category] = { hard: r.hard_facets ?? [], soft: r.soft_facets ?? [] };
+  }
+  return map;
 }
 
 /** Leidende nullen weg zodat GTIN-13/EAN-8-varianten gelijk vergelijken. */
@@ -98,7 +115,7 @@ function brokenReason(key, source, cand) {
  * De vier-uitgangen-funnel. `source` en `cand` zijn ProductFacets-structs,
  * elk met optioneel `ean`. Retourneert { decision, reasons[], broken[] }.
  */
-export function classify(source, cand) {
+export function classify(source, cand, policies = CATEGORY_POLICY) {
   // EXACT: identiek artikel, hier goedkoper — geen substitutie.
   const se = normEan(source.ean);
   const ce = normEan(cand.ean);
@@ -111,7 +128,7 @@ export function classify(source, cand) {
     return { decision: 'NO_MATCH', reasons: ['andere categorie'], broken: [] };
   }
 
-  const policy = categoryPolicy(source.category);
+  const policy = categoryPolicy(source.category, policies);
   const hardNonCategory = policy.hard.filter((k) => k !== 'category');
   const broken = hardNonCategory.filter((k) => !facetSatisfied(k, source, cand));
 
