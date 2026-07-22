@@ -242,14 +242,24 @@ auto-toepassen; anders degradeert de categorie automatisch naar COMPROMISE-only.
   SKU's over 6 ketens (huismerk G'woon/1 de Beste/Jumbo + A-merk Coca-Cola/Pepsi)
   — de cross-chain huismerk-match die EAN-only nooit kon. Verfijnpunten voor de
   facet-golden: cafeïnevrij als eigen as, "zero lemon" als flavor=lemon.
-- **Fase 4 — Runtime funnel-swap** in `pricing.ts`:
-  EXACT/EQUIVALENT/COMPROMISE/NO_MATCH + uitlegbaarheid; auto-toepassen van
-  zekere tiers.
+- **Fase 4 — Runtime funnel. ✅ server (2026-07-22).** `lib/basket-plan.ts`:
+  anker → canonieke knoop → goedkoopste sibling per keten →
+  EXACT/EQUIVALENT/COMPROMISE/NO_MATCH + uitlegbaarheid. **Additief & read-only**
+  (raakt de bestaande EAN-only pricing niet). Endpoint `GET /v1/lists/{id}/basket-plan`.
+  8 unit-tests; volledige functions-api-suite groen (91). Rest: deploy naar dev.
+- **Fase 6 — Basket Optimizer. ✅ server (2026-07-22).** In `basket-plan.ts`:
+  goedkoopste enkele winkel / split per item / besparing. Meegetest. Rest: UI.
 - **Fase 5 — Client three-bucket UX** (direct totaal + wachtrij + "waarom") in
-  `apps/mobile/src/app/lijst/resultaat.tsx`.
-- **Fase 6 — Basket Optimizer** endpoint + UI.
+  `apps/mobile/src/app/lijst/resultaat.tsx`, consumeert `/basket-plan`. Open
+  (na deploy van het endpoint).
 - **Fase 7 — Zelf-tuning activeren** vanuit `match_events`/`overrides_agg` naar
-  `match_policy_calibration`.
+  `match_policy_calibration`. Open.
+
+### Rollout-restant (om dit live te krijgen)
+1. **Deploy** functions-api naar dev (het `/basket-plan`-endpoint) — outward, wacht op akkoord.
+2. **Broad backfill**: `facet-run` + `canonical-run` over de hele catalogus (nu enkel frisdrank-sample op dev) — LLM-kosten, als geplande job.
+3. **Client** (Fase 5) bouwen + verifiëren tegen het live endpoint.
+4. **Zelf-tuning** (Fase 7).
 
 ## 9. Het risico dat telt
 

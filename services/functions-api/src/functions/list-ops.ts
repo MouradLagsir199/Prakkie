@@ -6,6 +6,7 @@ import { HttpError, handler, json, parseBody, requireAuth } from '../lib/http';
 import { buildShoppingSessionPayload, generateLines, priceList, priceShoppingSession } from '../lib/pricing';
 import { MATCH_POLICIES } from '../lib/match-policy';
 import { parseShoppingSessionItemIds } from '../lib/shopping-session-query';
+import { planBasket } from '../lib/basket-plan';
 
 /** WS5 — list-generate (G1/G2), list-price (G7), basket-compare (F2), deals-for-list (F3). */
 
@@ -102,6 +103,29 @@ app.http('list-price', {
     const policy = z.enum(MATCH_POLICIES).catch('precise').parse(req.query.get('policy') ?? 'precise');
     const pricing = await priceList(listId, chains, claims.userId, { policy });
     return json(200, { list_id: listId, chains: pricing });
+  }),
+});
+
+/**
+ * Basket-plan (matching v2, docs/09 Fase 4+6): het directe cross-supermarkt
+ * totaal via de canonical product graph + de basket-optimizer. Read-only en
+ * additief — verandert niets aan de bestaande EAN-only pricing of aan de lijst.
+ */
+app.http('list-basket-plan', {
+  methods: ['GET'],
+  authLevel: 'anonymous',
+  route: 'v1/lists/{id}/basket-plan',
+  handler: handler(async (req) => {
+    const claims = await requireAuth(req);
+    const listId = req.params.id!;
+    await requireList(listId, claims.userId);
+    const chains = await userChains(claims.userId, (req.query.get('chains') ?? '').split(',').filter(Boolean));
+    const plan = await planBasket(listId, chains);
+    return {
+      status: 200,
+      headers: { 'cache-control': 'private, no-store' },
+      jsonBody: plan,
+    };
   }),
 });
 
