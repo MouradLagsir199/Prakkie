@@ -255,11 +255,20 @@ auto-toepassen; anders degradeert de categorie automatisch naar COMPROMISE-only.
 - **Fase 7 — Zelf-tuning activeren** vanuit `match_events`/`overrides_agg` naar
   `match_policy_calibration`. Open.
 
-### Rollout-restant (om dit live te krijgen)
-1. **Deploy** functions-api naar dev (het `/basket-plan`-endpoint) — outward, wacht op akkoord.
-2. **Broad backfill**: `facet-run` + `canonical-run` over de hele catalogus (nu enkel frisdrank-sample op dev) — LLM-kosten, als geplande job.
-3. **Client** (Fase 5) bouwen + verifiëren tegen het live endpoint.
-4. **Zelf-tuning** (Fase 7).
+### Rollout-status
+1. **Deploy** functions-api → dev. ✅ `/basket-plan` live (CD 2026-07-22).
+2. **Broad backfill** (dev, ~118k producten, ~$15–20 gpt-4o-mini). ✅ **draait in Azure**:
+   - `caj-facet-enrich-dev` (Manual) — facet-extractie, nu bezig (~99,7% verified).
+   - `caj-facet-graph-dev` (Schedule, 04:00 UTC dagelijks) — bouwt de canonical graph
+     uit de facetten; goedkoop + idempotent, dus self-healing.
+   - Beide: image `crprakkiedev.azurecr.io/ean-enrichment:matching-v2`, identity
+     `id-ean-enrich-dev`, **`AZURE_CLIENT_ID` env vereist** (anders faalt de
+     managed-identity KV-fetch in de SDK). Nog te doen: in Bicep gieten
+     (`infra/modules/enrichment-job.bicep`) i.p.v. via CLI.
+   - Herstart backfill: `az containerapp job start -n caj-facet-enrich-dev -g prakkie-dev`
+     (hervatbaar — gate op `matcher_version`).
+3. **Client** (Fase 5) — consumeert `/basket-plan`. Open.
+4. **Zelf-tuning** (Fase 7). Open.
 
 ## 9. Het risico dat telt
 
