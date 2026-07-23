@@ -19,8 +19,10 @@ import {
   type ProductOption,
 } from '../../components/prakkie/ProductOptions';
 import { ChainLogo } from '../../components/prakkie/ChainLogo';
+import { CrossChainTotal } from '../../components/prakkie/CrossChainTotal';
 import { CTAButton } from '../../components/prakkie/CTAButton';
 import { LoadingBar } from '../../components/prakkie/LoadingBar';
+import { useBasketPlan } from '../../data/basket-plan';
 import { deleteRow, newId, syncNow, upsertRow, useEntityRows } from '../../data';
 import { authedRequest, currentUser } from '../../data/api';
 import { CHAIN_BRAND, chainName } from '../../data/chains';
@@ -395,6 +397,11 @@ export default function ResultaatScreen() {
       items: itemDescriptors,
     });
   }, [list?.id, items.length, chainsLoaded, myChains.join(','), listRevision, itemDescriptors]);
+
+  // matching v2 (Fase 5): het directe cross-supermarkt totaal van de server —
+  // read-only naast de handmatige samenstelling; toont zichzelf pas als de
+  // facet/graph-backfill matches oplevert.
+  const { plan: basketPlan } = useBasketPlan(list?.id ?? null, chainsLoaded ? myChains : []);
 
   // prijsregels per keten per item (van de opgeslagen staat)
   const linesByChain = useMemo(() => {
@@ -1599,6 +1606,9 @@ export default function ResultaatScreen() {
              shoppingCache.status === 'warming' && shoppingCache.listId === list?.id ? (
               <LoadingBar label="Prijzen en producten voorbereiden…" />
             ) : null}
+
+            {/* matching v2 (Fase 5): direct cross-supermarkt totaal + optimizer */}
+            {displayItems.length > 0 ? <CrossChainTotal plan={basketPlan} /> : null}
 
             {displayItems.length === 0 ? (
               <View style={{ alignItems: 'center', gap: 12, marginTop: 30 }}>

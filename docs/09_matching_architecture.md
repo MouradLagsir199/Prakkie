@@ -267,8 +267,11 @@ auto-toepassen; anders degradeert de categorie automatisch naar COMPROMISE-only.
      (`infra/modules/enrichment-job.bicep`) i.p.v. via CLI.
    - Herstart backfill: `az containerapp job start -n caj-facet-enrich-dev -g prakkie-dev`
      (hervatbaar — gate op `matcher_version`).
-3. **Client** (Fase 5) — consumeert `/basket-plan`. Open.
-4. **Zelf-tuning** (Fase 7). Open.
+3. **Client** (Fase 5). ✅ (2026-07-23). `data/basket-plan.ts` (`useBasketPlan`)
+   + `components/prakkie/CrossChainTotal.tsx` (direct totaal per super + optimizer
+   + "nog te kiezen"); gewired in `lijst/resultaat.tsx`, additief. Toont zichzelf
+   pas als de backfill matches oplevert. tsc groen; Metro-bundle groen.
+4. **Zelf-tuning** (Fase 7). Open (optioneel, laag geprioriteerd).
 
 ## 9. Het risico dat telt
 
